@@ -82,8 +82,8 @@ def log_clearml(series: str, value: float, step: int):
 
 def log_clearml_text(title: str, text: str):
     """Log text to ClearML if available."""
-    if _clearml_task is not None:
-        _clearml_task.get_logger().report_text(f"## {title}\n\n{text}")
+    if _clearml_logger is not None:
+        _clearml_logger.report_text(f"## {title}\n\n{text}")
 
 
 def register_clearml_artifact(name: str, path: str):
@@ -246,12 +246,27 @@ GENERATION_PROMPTS = [
 ]
 
 
-def run_generation_test(model, encoding, device: str, ddp: bool):
-    """Run greedy generation on fixed prompts and log results."""
+def run_generation_test(cfg, ckpt_dir, encoding, device: str):
+    """
+    Reconstruct a raw model from the latest checkpoint and generate text.
+
+    Under FSDP, calling model.module.generate() while parameters are still
+    sharded across ranks produces incorrect output or deadlocks.  Instead,
+    this function loads the fully-gathered checkpoint (saved by rank 0) into
+    a fresh, unwrapped model on a single GPU after the process group has
+    been torn down.  Safe for both single-GPU and post-FSDP scenarios.
+    """
     logger.info("Running post-training generation test...")
 
-    # Unwrap FSDP for generation (generate uses KV cache which needs the raw model)
-    raw_model = model.module if ddp else model
+    ckpts = _list_ckpts(ckpt_dir)
+    if not ckpts:
+        logger.warning("No checkpoint found — skipping generation test.")
+        return
+
+    ckpt = torch.load(ckpts[-1], map_location=device, weights_only=False)
+    raw_model = OpenMythos(cfg)
+    raw_model.load_state_dict(ckpt["model"])
+    raw_model = raw_model.to(device)
     raw_model.eval()
 
     results = []
@@ -274,7 +289,6 @@ def run_generation_test(model, encoding, device: str, ddp: bool):
 
     all_results = "\n---\n".join(results)
     log_clearml_text("Generation Samples", all_results)
-    raw_model.train()
 
 
 # ---------------------------------------------------------------------------
@@ -513,14 +527,20 @@ def main():
         save_checkpoint(model, optimizer, step, cfg, vocab_size, ckpt_dir, ddp, master)
 
     # ------------------------------------------------------------------
-    # Post-training generation test (rank 0 only)
+    # Tear down distributed process group before generation
     # ------------------------------------------------------------------
-    if master:
-        run_generation_test(model, encoding, device if not ddp else f"cuda:{local_rank}", ddp)
-
     if ddp:
         dist.barrier()
         dist.destroy_process_group()
+
+    # ------------------------------------------------------------------
+    # Post-training generation test (rank 0 only)
+    # ------------------------------------------------------------------
+    # Reconstruct a fresh model from the checkpoint so we don't need
+    # FSDP — the process group is already torn down at this point.
+    if master:
+        gen_device = device if not ddp else f"cuda:{local_rank}"
+        run_generation_test(cfg, ckpt_dir, encoding, gen_device)
 
     if master:
         logger.success("Training complete.")
