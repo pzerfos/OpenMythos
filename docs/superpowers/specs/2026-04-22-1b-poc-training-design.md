@@ -74,7 +74,7 @@ On rank 0 only:
 ```python
 from clearml import Task
 task = Task.init(
-    project_name=os.environ.get("CLEARML_PROJECT", "OpenMythos"),
+    project_name=os.environ.get("CLEARML_PROJECT", "granite-mythos"),
     task_name=os.environ.get("EXPERIMENT_NAME", "1b-poc-fineweb-10B"),
 )
 task.connect(vars(cfg))  # log all MythosConfig fields as hyperparameters
@@ -126,7 +126,7 @@ All secrets and runtime configuration are read from environment variables. No ha
 
 | Variable | Purpose | Default |
 |----------|---------|---------|
-| `CLEARML_PROJECT` | ClearML project name | `OpenMythos` |
+| `CLEARML_PROJECT` | ClearML project name | `granite-mythos` |
 | `EXPERIMENT_NAME` | ClearML task name | `1b-poc-fineweb-10B` |
 | `OUTPUT_DIR` | Checkpoint and log directory | `/u/pzerfos/data/granite-mythos/output/experiments` |
 | `NUM_GPUS` | GPUs to request in bsub | `2` |
