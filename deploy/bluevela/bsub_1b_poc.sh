@@ -93,7 +93,8 @@ bsub \
     OUTPUT_DIR="${OUTPUT_DIR}" \
     TARGET_TOKENS="${TARGET_TOKENS}" \
     bash -c "
-        cd ${REPO_DIR} && \
+        source \$(conda info --base)/etc/profile.d/conda.sh && \
         conda activate openmythos && \
+        cd ${REPO_DIR} && \
         torchrun --nproc_per_node=${NUM_GPUS} training/1b_poc_fineweb.py
     " 2>&1 | tee "${OUTPUT_DIR}/${DATE}_submit.log"
