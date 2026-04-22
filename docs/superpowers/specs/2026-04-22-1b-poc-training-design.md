@@ -148,7 +148,7 @@ training/
 deploy/
 ├── bluevela/
 │   ├── bsub_1b_poc.sh          # LSF job submission script
-│   └── setup_env.sh            # One-time venv + dependency setup
+│   └── setup_env.sh            # One-time conda env + dependency setup
 └── granite-build/
     └── (future — Granite.build job config)
 ```
@@ -169,7 +169,7 @@ deploy/
 - Queue: `preemptable`, group: `grp_preemptable`
 - GPUs: reads `NUM_GPUS` env var (default 2), exclusive process mode
 - 1 node
-- Activates venv before launching
+- Activates conda env before launching
 - Uses `blaunch` with `torchrun --nproc_per_node=$NUM_GPUS` for multi-GPU FSDP
 - Logs to `$OUTPUT_DIR/errs_and_logs/`
 - Passes through all environment variables to the job
@@ -177,7 +177,7 @@ deploy/
 **`deploy/bluevela/setup_env.sh`** — One-time setup script:
 - Validates required env vars are set (errors with clear message if missing)
 - Clones or pulls the repo from `ssh://git@github.ibm.com/pzerfos/OpenMythos.git`
-- Creates venv with `python3 -m venv .venv`
+- Creates conda env `openmythos` with Python 3.10
 - Installs Poetry, project deps, and training requirements
 - Verifies ClearML connectivity
 - Verifies HuggingFace token works

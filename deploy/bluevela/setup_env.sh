@@ -40,21 +40,22 @@ fi
 echo "All required environment variables are set."
 
 # ---------------------------------------------------------------------------
-# Create venv and install dependencies
+# Create conda env and install dependencies
 # ---------------------------------------------------------------------------
+CONDA_ENV_NAME="openmythos"
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_DIR"
 
-echo "Setting up venv in $REPO_DIR/.venv ..."
+echo "Setting up conda env '$CONDA_ENV_NAME' ..."
 
-if [ ! -d ".venv" ]; then
-    python3 -m venv .venv
-    echo "Created new venv."
+if conda info --envs | grep -q "^${CONDA_ENV_NAME} "; then
+    echo "Existing conda env found, reusing."
 else
-    echo "Existing venv found, reusing."
+    conda create -n "$CONDA_ENV_NAME" python=3.10 -y
+    echo "Created new conda env with Python 3.10."
 fi
 
-source .venv/bin/activate
+conda activate "$CONDA_ENV_NAME"
 
 pip install --upgrade pip
 pip install poetry

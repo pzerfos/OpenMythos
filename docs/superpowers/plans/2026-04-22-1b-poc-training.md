@@ -617,7 +617,7 @@ git commit -m "feat(training): add 1B PoC training script with ClearML integrati
 **Files:**
 - Create: `deploy/bluevela/setup_env.sh`
 
-This script is run once on BlueVela to set up the venv and validate all dependencies.
+This script is run once on BlueVela to set up the conda env and validate all dependencies.
 
 - [ ] **Step 1: Create the setup script**
 
@@ -666,21 +666,22 @@ fi
 echo "All required environment variables are set."
 
 # ---------------------------------------------------------------------------
-# Create venv and install dependencies
+# Create conda env and install dependencies
 # ---------------------------------------------------------------------------
+CONDA_ENV_NAME="openmythos"
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_DIR"
 
-echo "Setting up venv in $REPO_DIR/.venv ..."
+echo "Setting up conda env '$CONDA_ENV_NAME' ..."
 
-if [ ! -d ".venv" ]; then
-    python3 -m venv .venv
-    echo "Created new venv."
+if conda info --envs | grep -q "^${CONDA_ENV_NAME} "; then
+    echo "Existing conda env found, reusing."
 else
-    echo "Existing venv found, reusing."
+    conda create -n "$CONDA_ENV_NAME" python=3.10 -y
+    echo "Created new conda env with Python 3.10."
 fi
 
-source .venv/bin/activate
+conda activate "$CONDA_ENV_NAME"
 
 pip install --upgrade pip
 pip install poetry
@@ -857,7 +858,7 @@ bsub \
     TARGET_TOKENS="${TARGET_TOKENS}" \
     bash -c "
         cd ${REPO_DIR} && \
-        source .venv/bin/activate && \
+        conda activate openmythos && \
         torchrun --nproc_per_node=${NUM_GPUS} training/1b_poc_fineweb.py
     " 2>&1 | tee "${OUTPUT_DIR}/${DATE}_submit.log"
 ```
