@@ -129,7 +129,7 @@ All secrets and runtime configuration are read from environment variables. No ha
 | `CLEARML_PROJECT` | ClearML project name | `granite-mythos` |
 | `EXPERIMENT_NAME` | ClearML task name | `1b-poc-fineweb-10B` |
 | `OUTPUT_DIR` | Checkpoint and log directory | `/u/pzerfos/data/granite-mythos/output/experiments` |
-| `NUM_GPUS` | GPUs to request in bsub | `2` |
+| `NUM_GPUS` | GPUs to request in bsub | `4` |
 | `TARGET_TOKENS` | Token budget in billions | `10` |
 
 ### Prerequisites

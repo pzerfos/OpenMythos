@@ -42,7 +42,7 @@ fi
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 OUTPUT_DIR="${OUTPUT_DIR:-/u/pzerfos/data/granite-mythos/output/experiments}"
-NUM_GPUS="${NUM_GPUS:-2}"
+NUM_GPUS="${NUM_GPUS:-4}"
 TARGET_TOKENS="${TARGET_TOKENS:-10}"
 CLEARML_PROJECT="${CLEARML_PROJECT:-granite-mythos}"
 EXPERIMENT_NAME="${EXPERIMENT_NAME:-1b-poc-fineweb-10B}"
