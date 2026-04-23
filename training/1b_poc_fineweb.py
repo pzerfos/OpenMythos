@@ -399,7 +399,7 @@ def main():
     # Hyperparameters (env-var configurable with defaults)
     # ------------------------------------------------------------------
     seq_len = 2048
-    micro_batch = 4
+    micro_batch = 1
     target_tokens_b = int(os.environ.get("TARGET_TOKENS", "10"))
     target_tokens = target_tokens_b * 1_000_000_000
     grad_accum = max(1, 256 // (world_size * micro_batch))
