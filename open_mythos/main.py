@@ -242,7 +242,7 @@ class GQAttention(nn.Module):
         attn = torch.matmul(q, k.transpose(-2, -1)) * scale
         if mask is not None:
             attn = attn + mask
-        attn = self.attn_drop(F.softmax(attn, dim=-1))
+        attn = self.attn_drop(F.softmax(attn, dim=-1).to(v.dtype))
         out = torch.matmul(attn, v)
         out = out.transpose(1, 2).contiguous().view(B, T, -1)
         return self.wo(out)
@@ -384,7 +384,7 @@ class MLAttention(nn.Module):
         attn = torch.matmul(q, k.transpose(-2, -1)) * scale
         if mask is not None:
             attn = attn + mask
-        attn = self.attn_drop(F.softmax(attn, dim=-1))
+        attn = self.attn_drop(F.softmax(attn, dim=-1).to(v.dtype))
         out = torch.matmul(attn, v)  # (B, H, T, v_dim)
         out = out.transpose(1, 2).contiguous().view(B, T, -1)
         return self.wo(out)

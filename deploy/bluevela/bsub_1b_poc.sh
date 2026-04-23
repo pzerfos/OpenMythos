@@ -99,9 +99,5 @@ bsub \
         source \$(conda info --base)/etc/profile.d/conda.sh && \
         conda activate openmythos && \
         cd ${REPO_DIR} && \
-        if [ ${NUM_GPUS} -eq 1 ]; then \
-            python training/1b_poc_fineweb.py; \
-        else \
-            torchrun --nproc_per_node=${NUM_GPUS} training/1b_poc_fineweb.py; \
-        fi
+        torchrun --nproc_per_node=${NUM_GPUS} training/1b_poc_fineweb.py
     " 2>&1 | tee "${OUTPUT_DIR}/${DATE}_submit.log"
