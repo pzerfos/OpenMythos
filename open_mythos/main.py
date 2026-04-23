@@ -218,6 +218,7 @@ class GQAttention(nn.Module):
             Output tensor of shape (B, T, dim)
         """
         B, T, _ = x.shape
+        x = x.to(self.wq.weight.dtype)  # align with FSDP param dtype
         q = self.wq(x).view(B, T, self.n_heads, self.head_dim)
         k = self.wk(x).view(B, T, self.n_kv_heads, self.head_dim)
         v = self.wv(x).view(B, T, self.n_kv_heads, self.head_dim)
@@ -340,6 +341,7 @@ class MLAttention(nn.Module):
             Output tensor of shape (B, T, dim)
         """
         B, T, _ = x.shape
+        x = x.to(self.q_down.weight.dtype)  # align with FSDP param dtype
 
         # Q
         c_q = self.q_norm(self.q_down(x))
@@ -423,6 +425,7 @@ class Expert(nn.Module):
         Returns:
             Tensor of shape (..., dim)
         """
+        x = x.to(self.gate.weight.dtype)  # align with FSDP param dtype
         return self.down(F.silu(self.gate(x)) * self.up(x))
 
 
@@ -476,6 +479,7 @@ class MoEFFN(nn.Module):
             of the weighted routed expert outputs
         """
         B, T, D = x.shape
+        x = x.to(self.router.weight.dtype)  # align with FSDP param dtype
         flat = x.view(B * T, D)
 
         # Aux-loss-free load balancing (DeepSeek-V3): the bias shifts only the
@@ -588,6 +592,7 @@ class LoRAAdapter(nn.Module):
         max_t = self.scale.num_embeddings - 1
         t_idx = loop_t if loop_t <= max_t else max_t
         s = self.scale(torch.tensor(t_idx, device=x.device))  # (rank,)
+        x = x.to(self.down.weight.dtype)  # align with FSDP param dtype
         down = self.down(x) * s  # (B, T, rank)
         return down @ self.B  # (B, T, dim)
 
@@ -750,7 +755,7 @@ class ACTHalting(nn.Module):
         Returns:
             Halting probability tensor of shape (B, T), values in (0, 1)
         """
-        return torch.sigmoid(self.halt(h)).squeeze(-1)
+        return torch.sigmoid(self.halt(h.to(self.halt.weight.dtype))).squeeze(-1)
 
 
 # ---------------------------------------------------------------------------
