@@ -59,20 +59,33 @@ _clearml_task = None
 _clearml_logger = None
 
 
-def init_clearml(cfg, training_hparams: dict):
-    """Initialize ClearML tracking on rank 0. No-op if ClearML env vars are missing."""
+def init_clearml(cfg, training_hparams: dict, timeout: int = 30):
+    """Initialize ClearML tracking on rank 0. No-op if unreachable or missing."""
     global _clearml_task, _clearml_logger
+    import signal
+
+    def _timeout_handler(signum, frame):
+        raise TimeoutError("ClearML init timed out")
+
     try:
         from clearml import Task
 
         project = os.environ.get("CLEARML_PROJECT", "granite-mythos")
         task_name = os.environ.get("EXPERIMENT_NAME", "1b-poc-fineweb-10B")
 
-        _clearml_task = Task.init(project_name=project, task_name=task_name)
-        _clearml_task.connect(vars(cfg), name="model_config")
-        _clearml_task.connect(training_hparams, name="training_hparams")
-        _clearml_logger = _clearml_task.get_logger()
-        logger.info(f"ClearML initialized: project={project}, task={task_name}")
+        # Task.init can hang if the ClearML server is unreachable (e.g.,
+        # compute nodes without internet). Use a SIGALRM timeout to fail fast.
+        old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
+        signal.alarm(timeout)
+        try:
+            _clearml_task = Task.init(project_name=project, task_name=task_name)
+            _clearml_task.connect(vars(cfg), name="model_config")
+            _clearml_task.connect(training_hparams, name="training_hparams")
+            _clearml_logger = _clearml_task.get_logger()
+            logger.info(f"ClearML initialized: project={project}, task={task_name}")
+        finally:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, old_handler)
     except Exception as e:
         logger.warning(f"ClearML init failed (training continues without tracking): {e}")
 
