@@ -912,8 +912,25 @@ class RecurrentBlock(nn.Module):
             # Only short-circuit when there is no KV cache to keep consistent.
             # With a cache, every loop depth must run on every forward pass so
             # later decode steps find populated keys at every cache_key.
-            if halted.all() and kv_cache is None:
-                break
+            if kv_cache is None:
+                all_halted = halted.all()
+                # Under FSDP/DDP each rank has different data, so halted.all()
+                # can differ across ranks.  If one rank breaks out of the loop
+                # while others continue, the FSDP all-gather inside self.block
+                # deadlocks (the exited rank never issues the collective).
+                # All-reduce with MIN so ranks only exit together.
+                # The all-reduce is unconditional — every rank must participate
+                # regardless of its local halting state.
+                if torch.distributed.is_initialized():
+                    flag = torch.tensor(
+                        [all_halted], dtype=torch.int32, device=h.device
+                    )
+                    torch.distributed.all_reduce(
+                        flag, op=torch.distributed.ReduceOp.MIN
+                    )
+                    all_halted = flag.item() > 0
+                if all_halted:
+                    break
 
         # Assign remainder weight for positions that never halted within n_loops.
         # Without this, non-halted positions have weights summing to < 1.0.
