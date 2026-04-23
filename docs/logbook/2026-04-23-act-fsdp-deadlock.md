@@ -242,14 +242,61 @@ Possible mitigations:
 This is tracked as a separate issue (pzerfos/OpenMythos#5) since it affects
 model quality independent of the FSDP fix.
 
+## Fix Validation
+
+### Job 33841 — fix confirmed (commit 6c5659c)
+
+First run with the all-reduce fix. Sailed past the step-33 barrier for the
+first time — all previous runs deadlocked here.
+
+```
+step  33/305175 | loss 11.78  ← old crash point
+step  34/305175 | loss 11.91  ← NEW — never reached before
+step 107/305175 | loss  8.50
+step 916/305175 | loss  5.71
+```
+
+First checkpoint saved at step 1,000 (`step_0001000.pt`, 18GB). Training
+killed manually at step ~1,004 to relocate checkpoint storage.
+
+**ACT early exit speedup preserved:** step time dropped from ~2.3s (steps 1-33,
+ACT not yet halting early across all ranks) to ~1.0s (steps 100+, ACT early
+exit firing via the all-reduce). The fix doesn't just prevent the deadlock —
+it preserves the compute savings.
+
+### Job 34019 — checkpoint resume confirmed
+
+Checkpoints moved to `/proj/checkpoints/pzerfos/openmythos/checkpoints` via
+symlink from the original path (home directory space constraint).
+
+```
+Resuming from checkpoint: .../step_0001000.pt
+Resumed at step 1000
+step 1001/305175 | loss 5.54  ← continuous with pre-kill loss (5.45)
+step 1219/305175 | loss 5.06  ← still dropping, ~1s/step
+```
+
+Checkpoint save/load works through the symlink. Loss is continuous across
+restart (no regression). `keep_last=3` caps storage at ~54GB.
+
+### MoE dispatch speedup confirmed (before/after)
+
+| Run | Step time | MoE dispatch | Notes |
+|-----|-----------|-------------|-------|
+| Pre-optimization (job 31808) | ~16.7s | Nested loop (256 iterations) | Deadlocked at step 32 |
+| Post-optimization (job 33050) | ~2.3s | Grouped dispatch | Deadlocked at step 33 |
+| Post-optimization + ACT fix (job 33841) | ~2.3s → ~1.0s | Grouped + ACT early exit | Runs past step 1,000+ |
+
+The combined effect of grouped MoE dispatch (6.7x) and restored ACT early
+exit (~2.3x) gives roughly **16x total speedup** over the original code.
+
 ## Status
 
-- Bug confirmed via NCCL collective sequence analysis
-- Root cause identified: ACT `halted.all()` early exit + FSDP rank desync
-- Reproduced on two independent runs (jobs 31808 and 33050, different nodes)
-- Fix approach: B (all-reduce halt flag) — recommended
+- Bug confirmed, root cause identified, fix applied (commit `6c5659c`)
+- Fix validated on BlueVela: job 33841 ran past step 1,000 (previous limit: step 33)
+- Checkpoint resume validated: job 34019 resumed from step 1,000, loss continuous
+- Job 34019 running on preemptable queue, 4 GPUs, ~1s/step, targeting 1B tokens
+- Checkpoints at `/proj/checkpoints/pzerfos/openmythos/checkpoints` (symlinked)
 - Separate concern: premature ACT halting during warmup (issue #5)
-- **Fix applied:** approach B — all-reduce halt flag with `dist.all_reduce(MIN)`
-  in `RecurrentBlock.forward()` (commit pending)
 - 10 new tests in `tests/test_act_fsdp_fix.py` — all pass
 - 252 total tests pass (14 pre-existing failures in test_main.py unchanged)

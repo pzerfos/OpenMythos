@@ -93,9 +93,25 @@ All 53 non-pre-existing tests pass, including full-model GQA/MLA forward, genera
 
 ---
 
+## MoE Dispatch Speedup Confirmed (job 33050 vs job 31808)
+
+| Run | Step time | Dispatch method |
+|-----|-----------|----------------|
+| Pre-optimization (job 31808) | ~16.7s | Nested loop (4 × 64 = 256 iterations) |
+| Post-optimization (job 33050) | ~2.3s | Grouped dispatch (sort + batch per expert) |
+
+**6.7x speedup** from the MoE dispatch optimization alone. Both runs deadlocked
+at ~step 33 due to a separate bug (ACT early exit FSDP deadlock — see
+`2026-04-23-act-fsdp-deadlock.md`).
+
+After fixing the ACT deadlock (commit `6c5659c`), ACT early exit restored a
+further ~2.3x speedup (steps drop from ~2.3s to ~1.0s once halting kicks in).
+**Combined: ~16x total speedup** over the original code.
+
 ## Next Steps
 
-1. **Benchmark MoE dispatch on GPU** — Measure step time with grouped dispatch vs. the old nested loop on BlueVela to quantify the speedup
+1. ~~**Benchmark MoE dispatch on GPU**~~ — Done: 6.7x confirmed (see above)
 2. **Fix pre-existing test failures** — Update test configs for RoPE dimension mismatch; fix LTI boundary test
-3. **Monitor job 29260** — Let it run to accumulate more convergence data
+3. **Monitor job 34019** — 1B token run in progress, step ~1,200 and counting
 4. **router_bias decision** — Implement DeepSeek-V3 style bias updates or document as disabled for PoC
+5. **ACT initialization** — Investigate premature halting during warmup (issue #5)
