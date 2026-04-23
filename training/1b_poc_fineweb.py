@@ -41,6 +41,8 @@ from torch.distributed.fsdp.wrap import ModuleWrapPolicy
 from torch.utils.data import IterableDataset, DataLoader, get_worker_info
 from contextlib import nullcontext
 
+import glob as _glob
+import pyarrow.parquet as pq
 from datasets import load_dataset
 
 from open_mythos import OpenMythos
@@ -122,34 +124,51 @@ class FineWebEduDataset(IterableDataset):
         self.dataset_path = dataset_path
         self.dataset_subset = dataset_subset
 
-    def _load_dataset(self, shard_index: int, total_shards: int):
-        if self.dataset_path:
-            ds = load_dataset(
-                "parquet",
-                data_dir=self.dataset_path,
-                split="train",
-                streaming=True,
+    def _get_parquet_files(self, shard_index: int, total_shards: int) -> list[str]:
+        """Return the subset of parquet files assigned to this shard."""
+        all_files = sorted(_glob.glob(os.path.join(self.dataset_path, "*.parquet")))
+        if not all_files:
+            raise FileNotFoundError(
+                f"No .parquet files found in {self.dataset_path}"
             )
-        else:
-            ds = load_dataset(
-                "HuggingFaceFW/fineweb-edu",
-                name=self.dataset_subset,
-                split="train",
-                streaming=True,
-            )
-        return ds.shard(num_shards=total_shards, index=shard_index)
+        return [f for i, f in enumerate(all_files) if i % total_shards == shard_index]
 
-    def __iter__(self):
-        worker = get_worker_info()
-        num_workers = worker.num_workers if worker else 1
-        worker_id = worker.id if worker else 0
+    def _iter_parquet(self, shard_index: int, total_shards: int):
+        """Read local parquet files directly via pyarrow. Loops infinitely."""
+        files = self._get_parquet_files(shard_index, total_shards)
+        if not files:
+            return
 
-        total_shards = self.world_size * num_workers
-        shard_index = self.rank * num_workers + worker_id
+        buf: list[int] = []
+        while True:
+            for parquet_path in files:
+                table = pq.read_table(parquet_path, columns=["text"])
+                text_column = table.column("text")
+                del table
 
-        ds = self._load_dataset(shard_index, total_shards)
+                for text_value in text_column:
+                    text = text_value.as_py()
+                    if text:
+                        buf.extend(self.encoding.encode(text))
+                        while len(buf) >= self.seq_len + 1:
+                            chunk = buf[: self.seq_len + 1]
+                            buf = buf[self.seq_len + 1 :]
+                            yield (
+                                torch.tensor(chunk[:-1], dtype=torch.long),
+                                torch.tensor(chunk[1:], dtype=torch.long),
+                            )
+                del text_column
 
-        buf = []
+    def _iter_streaming(self, shard_index: int, total_shards: int):
+        """HuggingFace streaming fallback (requires internet)."""
+        ds = load_dataset(
+            "HuggingFaceFW/fineweb-edu",
+            name=self.dataset_subset,
+            split="train",
+            streaming=True,
+        ).shard(num_shards=total_shards, index=shard_index)
+
+        buf: list[int] = []
         for sample in ds:
             buf.extend(self.encoding.encode(sample["text"]))
             while len(buf) >= self.seq_len + 1:
@@ -159,6 +178,19 @@ class FineWebEduDataset(IterableDataset):
                     torch.tensor(chunk[:-1], dtype=torch.long),
                     torch.tensor(chunk[1:], dtype=torch.long),
                 )
+
+    def __iter__(self):
+        worker = get_worker_info()
+        num_workers = worker.num_workers if worker else 1
+        worker_id = worker.id if worker else 0
+
+        total_shards = self.world_size * num_workers
+        shard_index = self.rank * num_workers + worker_id
+
+        if self.dataset_path:
+            yield from self._iter_parquet(shard_index, total_shards)
+        else:
+            yield from self._iter_streaming(shard_index, total_shards)
 
 
 # ---------------------------------------------------------------------------
