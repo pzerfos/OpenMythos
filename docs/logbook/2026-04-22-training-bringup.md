@@ -131,15 +131,42 @@ step 31/305175 | loss 11.9062 | gnorm 5.91 | lr 4.50e-06
 
 **Loss dropped from 12.66 to 11.86 in 30 steps — the model is learning.** Gradient norms increasing from ~4.5 to ~5.9 as LR ramps up during warmup, which is expected. No NaN/Inf. The PoC's primary success criterion ("training loss steadily decreases") is met. The OpenMythos recurrent-depth transformer architecture trains correctly.
 
+### Training job preempted (~04:50 UTC)
+
+Job 26518 was killed by LSF with SIGABRT (exit code -6) — preempted by a higher-priority job on the `preemptable` queue. This is expected behavior for this queue. Training reached step ~31 before preemption.
+
+### Upstream merge (~04:30 UTC)
+
+Merged 3 upstream commits (`7d78ebe`, `963e112`, `227dbb1`):
+- **Flash Attention 2** support in GQAttention — conditional import, uses `flash_attn_func` when available, falls back to manual attention otherwise. Handles GQA natively (no KV head expansion), IO-optimal.
+- **Causal mask dtype fix** — mask now created in activation dtype instead of float32. Resolves our code review item #9.
+- **Tests moved** to `tests/` directory, new benchmarks and examples added.
+- **Conflict resolution:** Kept our FSDP dtype cast at GQAttention entry and added `.to(v.dtype)` after softmax in the fallback path. 45 tests passing post-merge.
+
+### flash-attn installation (in progress)
+
+Building `flash-attn` from source on BlueVela login node with `CUDA_HOME=/opt/share/cuda-13.0`. CUDA kernel compilation is slow (~10-20 minutes). Once installed, GQAttention will automatically use Flash Attention 2 for significant throughput improvement.
+
+---
+
+## Current Status
+
+- **Training:** Validated — loss converges (12.66 → 11.86 in 30 steps). Job was preempted; needs resubmit.
+- **Flash Attention:** Building on BlueVela. Once ready, will resubmit with flash-attn enabled.
+- **Upstream:** Merged and pushed. All tests pass.
+- **Throughput:** ~2K tok/s on 4 GPUs without flash-attn. Expected significant improvement with flash-attn.
+
 ---
 
 ## Next Steps
 
 ### A. Speed Up Training (Priority: High)
 
-Current throughput (~2K tok/s, ~56 days for 10B tokens) is far too slow for a PoC. Multiple approaches, roughly ordered by impact:
+Current throughput (~2K tok/s, ~56 days for 10B tokens) is far too slow. Multiple approaches, roughly ordered by impact:
 
-1. **Optimize MoE dispatch loop** — The current implementation (`main.py:496-504`) uses a nested Python loop of 256 iterations (topk=4 × n_experts=64) per forward pass. Replace with a grouped/batched dispatch pattern (gather all tokens per expert, run expert once, scatter back). This is the single biggest throughput bottleneck. See `docs/code-review-2026-04-23.md`, issue #4.
+1. **Flash Attention 2 (in progress)** — Building on BlueVela. Upstream already merged support into GQAttention. Should significantly speed up attention computation. MLAttention still uses manual attention and could benefit from a similar flash-attn integration in the future.
+
+2. **Optimize MoE dispatch loop** — The current implementation (`main.py:496-504`) uses a nested Python loop of 256 iterations (topk=4 × n_experts=64) per forward pass. Replace with a grouped/batched dispatch pattern (gather all tokens per expert, run expert once, scatter back). This is the single biggest throughput bottleneck. See `docs/code-review-2026-04-23.md`, issue #4.
 
 2. **Request more GPUs (8 GPUs)** — Doubles FSDP parallelism and halves per-GPU activation memory, potentially allowing micro_batch=2 which halves grad_accum steps.
 
@@ -198,8 +225,14 @@ Full report: `docs/code-review-2026-04-23.md`
 | `docs/superpowers/plans/2026-04-22-1b-poc-training.md` | Created — implementation plan |
 | `docs/code-review-2026-04-23.md` | Created — comprehensive code review |
 | `docs/datasets.md` | Unchanged — referenced for dataset info |
+| `docs/logbook/2026-04-22-training-bringup.md` | Created — this logbook |
+| `examples/moda_example.py` | Added from upstream merge |
+| `examples/variants_example.py` | Added from upstream merge |
+| `tests/test_main.py` | Moved from root (upstream merge) |
+| `tests/bench_vs_transformer.py` | Added from upstream merge |
+| `tests/small_benchmark.py` | Added from upstream merge |
 
-## Commits (25 total)
+## Commits (28 total)
 
 ```
 0e2eeef Add architecture comparison docs
@@ -227,4 +260,6 @@ f5e3b68 fix(training): reduce micro_batch to 1 for 4-GPU FSDP OOM
 6583662 docs: add comprehensive code review report with prioritized fixes
 be9e5ab fix(model): cast input to LM head dtype for FSDP mixed precision
 dda91ed fix(training): reduce grad_accum and log every step for faster feedback
+4ab3e2e docs(logbook): add convergence confirmation
+6e854c5 merge upstream/main: flash attention, tests, examples
 ```
