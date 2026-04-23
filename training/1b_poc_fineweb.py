@@ -19,6 +19,7 @@ Environment variables (optional):
     EXPERIMENT_NAME  -- ClearML task name (default: 1b-poc-fineweb-10B)
     OUTPUT_DIR       -- checkpoint dir (default: /u/pzerfos/data/granite-mythos/output/experiments)
     TARGET_TOKENS    -- token budget in billions (default: 10)
+    DATASET_PATH     -- local path to parquet files (default: /proj/datasets/pzerfos/fineweb-edu-100B/sample/100BT)
     NUM_GPUS         -- number of GPUs (informational, actual count from torchrun)
 """
 
@@ -99,19 +100,44 @@ def register_clearml_artifact(name: str, path: str):
 
 class FineWebEduDataset(IterableDataset):
     """
-    Streaming FineWeb-Edu loader yielding fixed-length (input, target) pairs.
+    FineWeb-Edu loader yielding fixed-length (input, target) pairs.
+
+    Supports two modes:
+      - Local parquet: loads from a directory of .parquet files (no internet needed)
+      - Streaming: pulls shards on demand from HuggingFace (requires internet)
 
     Documents are concatenated into a rolling buffer and sliced into
     fixed-length chunks. Sharding is two-dimensional: world_size ranks x
     num_workers DataLoader workers per rank.
     """
 
-    def __init__(self, encoding, seq_len: int, subset: str, rank: int, world_size: int):
+    def __init__(
+        self, encoding, seq_len: int, rank: int, world_size: int,
+        dataset_path: str = "", dataset_subset: str = "sample-10BT",
+    ):
         self.encoding = encoding
         self.seq_len = seq_len
-        self.subset = subset
         self.rank = rank
         self.world_size = world_size
+        self.dataset_path = dataset_path
+        self.dataset_subset = dataset_subset
+
+    def _load_dataset(self, shard_index: int, total_shards: int):
+        if self.dataset_path:
+            ds = load_dataset(
+                "parquet",
+                data_dir=self.dataset_path,
+                split="train",
+                streaming=True,
+            )
+        else:
+            ds = load_dataset(
+                "HuggingFaceFW/fineweb-edu",
+                name=self.dataset_subset,
+                split="train",
+                streaming=True,
+            )
+        return ds.shard(num_shards=total_shards, index=shard_index)
 
     def __iter__(self):
         worker = get_worker_info()
@@ -121,12 +147,7 @@ class FineWebEduDataset(IterableDataset):
         total_shards = self.world_size * num_workers
         shard_index = self.rank * num_workers + worker_id
 
-        ds = load_dataset(
-            "HuggingFaceFW/fineweb-edu",
-            name=self.subset,
-            split="train",
-            streaming=True,
-        ).shard(num_shards=total_shards, index=shard_index)
+        ds = self._load_dataset(shard_index, total_shards)
 
         buf = []
         for sample in ds:
@@ -349,6 +370,9 @@ def main():
         "OUTPUT_DIR", "/u/pzerfos/data/granite-mythos/output/experiments"
     )
     ckpt_dir = os.path.join(output_dir, "checkpoints")
+    dataset_path = os.environ.get(
+        "DATASET_PATH", "/proj/datasets/pzerfos/fineweb-edu-100B/sample/100BT"
+    )
     dataset_subset = "sample-10BT"
 
     training_hparams = {
@@ -365,6 +389,7 @@ def main():
         "log_every": log_every,
         "ckpt_every": ckpt_every,
         "output_dir": output_dir,
+        "dataset_path": dataset_path,
         "dataset_subset": dataset_subset,
         "world_size": world_size,
     }
@@ -443,7 +468,10 @@ def main():
     # ------------------------------------------------------------------
     # Dataset + DataLoader
     # ------------------------------------------------------------------
-    dataset = FineWebEduDataset(encoding, seq_len, dataset_subset, rank, world_size)
+    dataset = FineWebEduDataset(
+        encoding, seq_len, rank, world_size,
+        dataset_path=dataset_path, dataset_subset=dataset_subset,
+    )
     loader = DataLoader(dataset, batch_size=micro_batch, num_workers=4, pin_memory=True)
 
     # ------------------------------------------------------------------

@@ -46,6 +46,7 @@ NUM_GPUS="${NUM_GPUS:-4}"
 TARGET_TOKENS="${TARGET_TOKENS:-10}"
 CLEARML_PROJECT="${CLEARML_PROJECT:-granite-mythos}"
 EXPERIMENT_NAME="${EXPERIMENT_NAME:-1b-poc-fineweb-10B}"
+DATASET_PATH="${DATASET_PATH:-/proj/datasets/pzerfos/fineweb-edu-100B/sample/100BT}"
 
 umask 0002
 
@@ -66,6 +67,7 @@ echo "========================================="
 echo "  GPUs:          $NUM_GPUS"
 echo "  Target tokens: ${TARGET_TOKENS}B"
 echo "  Output dir:    $OUTPUT_DIR"
+echo "  Dataset:       $DATASET_PATH"
 echo "  ClearML:       $CLEARML_PROJECT / $EXPERIMENT_NAME"
 echo "  Log:           $LOG_FILE"
 echo "  Err:           $ERR_FILE"
@@ -92,6 +94,7 @@ bsub \
     EXPERIMENT_NAME="${EXPERIMENT_NAME}" \
     OUTPUT_DIR="${OUTPUT_DIR}" \
     TARGET_TOKENS="${TARGET_TOKENS}" \
+    DATASET_PATH="${DATASET_PATH}" \
     bash -c "
         source \$(conda info --base)/etc/profile.d/conda.sh && \
         conda activate openmythos && \
