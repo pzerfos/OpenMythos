@@ -402,14 +402,14 @@ def main():
     micro_batch = 1
     target_tokens_b = int(os.environ.get("TARGET_TOKENS", "10"))
     target_tokens = target_tokens_b * 1_000_000_000
-    grad_accum = max(1, 256 // (world_size * micro_batch))
+    grad_accum = max(1, 16 // (world_size * micro_batch))
     global_batch_tok = world_size * micro_batch * grad_accum * seq_len
     total_steps = target_tokens // global_batch_tok
     warmup_steps = 2000
     lr = 3e-4
     min_lr = 3e-5
     wd = 0.1
-    log_every = 10
+    log_every = 1
     ckpt_every = 1000
     output_dir = os.environ.get(
         "OUTPUT_DIR", "/u/pzerfos/data/granite-mythos/output/experiments"
