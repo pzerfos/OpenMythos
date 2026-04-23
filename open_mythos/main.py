@@ -1000,7 +1000,8 @@ class OpenMythos(nn.Module):
         for i, layer in enumerate(self.coda):
             x = layer(x, freqs_cis, mask, kv_cache, cache_key=f"coda_{i}")
 
-        return self.head(self.norm(x))
+        x = self.norm(x)
+        return self.head(x.to(self.head.weight.dtype))
 
     @torch.no_grad()
     def generate(
