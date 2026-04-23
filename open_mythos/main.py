@@ -105,8 +105,9 @@ class RMSNorm(nn.Module):
         Returns:
             RMS-normalized tensor of the same shape, rescaled by self.weight
         """
-        rms = x.pow(2).mean(-1, keepdim=True).add(self.eps).rsqrt()
-        return x * rms * self.weight
+        dtype = x.dtype
+        rms = x.float().pow(2).mean(-1, keepdim=True).add(self.eps).rsqrt()
+        return (x * rms * self.weight).to(dtype)
 
 
 # ---------------------------------------------------------------------------
