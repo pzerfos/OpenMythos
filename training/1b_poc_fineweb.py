@@ -494,7 +494,7 @@ def main():
     # Optimizer
     # ------------------------------------------------------------------
     optimizer = torch.optim.AdamW(
-        model.parameters(), lr=lr, weight_decay=wd, betas=(0.9, 0.95), fused=True
+        model.parameters(), lr=lr, weight_decay=wd, betas=(0.9, 0.95), fused="cuda" in device
     )
 
     # ------------------------------------------------------------------

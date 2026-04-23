@@ -50,14 +50,52 @@ Loss dropping (12.64 → 12.47), training stable.
 
 ---
 
-## Findings & Observations
+## Code Review Fixes & MoE Optimization
 
-*(will be updated as the day progresses)*
+Applied all actionable items from `docs/code-review-2026-04-23.md` plus the MoE dispatch optimization:
+
+### MoE grouped dispatch (issue #4 — throughput bottleneck)
+
+Replaced the nested Python loop (`for i in range(topk): for eid in range(n_experts):` — 256 iterations) with grouped/batched dispatch:
+
+1. Flatten all topk (token, expert) pairs into `(N*topk,)` tensors
+2. `argsort` by expert ID for contiguous grouping
+3. `unique_consecutive` to find expert boundaries
+4. Run each active expert once on its full batch
+5. Scatter results back and sum over topk dim
+
+Reduces from 256 Python iterations to at most `n_active_experts` (<=64, typically fewer), each processing a larger contiguous batch for better GPU utilization.
+
+### Correctness fixes applied
+
+| # | Fix | File(s) |
+|---|-----|---------|
+| 1 | ACT remainder for non-halted positions | `main.py:898-901` |
+| 2 | MoE score renorm `.clamp(min=1e-9)` | `main.py:521` |
+| 5 | Remove nonexistent `__init__.py` exports | `__init__.py` |
+| 6 | Guard `fused=True` AdamW with CUDA check | both training scripts |
+| 7 | LoRAAdapter.B defensive dtype cast | `main.py:625` |
+| 8 | loop_index_embedding compute in float32 | `main.py:567-575` |
+
+### Not addressed this session
+
+- **Issue #3 (router_bias):** Load balancing bias is never updated. Deferred — requires design decision on training loop integration vs. documenting as disabled for PoC.
+- **Issue #9 (causal mask dtype):** Already fixed by upstream flash-attn merge.
+- **Issue #10 (RoPE lazy extension):** Deferred — no current need beyond `max_seq_len`.
+- **Issue #11 (amp_ctx variable flow):** Cosmetic, deferred.
+
+### Pre-existing test failures (14 tests)
+
+- 13 from RoPE dimension mismatch in `apply_rope` — test configs produce incompatible `freqs_cis` shapes after the upstream flash-attn merge. Needs test config update.
+- 1 from LTI spectral radius boundary: `A.max() == 1.0`, test uses strict `< 1.0`.
+
+All 53 non-pre-existing tests pass, including full-model GQA/MLA forward, generate, KV cache, and depth extrapolation.
 
 ---
 
 ## Next Steps
 
-1. **Optimize MoE dispatch** — Replace nested Python loop with grouped/batched dispatch. This is the #1 throughput lever.
-2. **Monitor job 29260** — Let it run to accumulate more convergence data
-3. **Code review fixes** — ACT remainder, MoE epsilon, router_bias (see `docs/code-review-2026-04-23.md`)
+1. **Benchmark MoE dispatch on GPU** — Measure step time with grouped dispatch vs. the old nested loop on BlueVela to quantify the speedup
+2. **Fix pre-existing test failures** — Update test configs for RoPE dimension mismatch; fix LTI boundary test
+3. **Monitor job 29260** — Let it run to accumulate more convergence data
+4. **router_bias decision** — Implement DeepSeek-V3 style bias updates or document as disabled for PoC
