@@ -110,8 +110,38 @@ further ~2.3x speedup (steps drop from ~2.3s to ~1.0s once halting kicks in).
 
 ## Next Steps
 
+### Completed this session
 1. ~~**Benchmark MoE dispatch on GPU**~~ — Done: 6.7x confirmed (see above)
-2. **Fix pre-existing test failures** — Update test configs for RoPE dimension mismatch; fix LTI boundary test
-3. **Monitor job 34019** — 1B token run in progress, step ~1,200 and counting
-4. **router_bias decision** — Implement DeepSeek-V3 style bias updates or document as disabled for PoC
-5. **ACT initialization** — Investigate premature halting during warmup (issue #5)
+2. ~~**ACT FSDP deadlock**~~ — Diagnosed, fixed, validated (see `2026-04-23-act-fsdp-deadlock.md`)
+3. ~~**Comprehensive test suite**~~ — 233 → 262 tests across all modules
+
+### In progress
+4. **Monitor job 34019** — 1B token run (ACT enabled, fixed `n_loops=16`),
+   4 GPUs on preemptable. Step ~10,000 / 30,518 as of 01:16 UTC, loss 3.57.
+   ETA ~5-6 hours to complete. Validates the full pipeline post-fixes.
+
+### Near-term follow-ups
+5. **Fix pre-existing test failures** — 14 tests in `tests/test_main.py`:
+   13 from RoPE dimension mismatch after upstream flash-attn merge,
+   1 from LTI spectral radius float32 boundary
+6. **router_bias load balancing** (issue #3) — Implement DeepSeek-V3 style
+   periodic bias updates in training loop, or document as disabled for PoC
+7. **Scale to 16 GPUs on normal queue** — Once job 34019 validates the
+   pipeline, submit a longer run with `-q normal -G grp_granite_` and 16 GPUs
+   (~2.5 days for 10B tokens vs ~21 hours for 1B)
+
+### Architecture decisions (informed by upstream findings)
+8. **ACT vs depth extrapolation** (issue #5) — Upstream empirical work
+   ([kyegomez/OpenMythos#28](https://github.com/kyegomez/OpenMythos/issues/28),
+   13 ablation runs) conclusively shows ACT is the primary mechanism binding
+   the model to its training loop count. Disabling ACT + random loop sampling
+   is the only recipe that produces monotonic depth-scaling. Three options:
+   - **A.** Keep ACT for adaptive compute, accept no depth extrapolation
+     (current PoC approach)
+   - **B.** Disable ACT, return final `h` directly, train with stochastic
+     depth sampling — enables depth extrapolation but loses per-token
+     adaptive compute
+   - **C.** Replace ACT weighted sum with a soft attention over loop outputs
+     trained jointly with stochastic depth — potentially gets both, untested
+9. **RoPE lazy extension** (issue #3) — Not urgent until `seq_len > max_seq_len`
+   is needed, but a correctness gap worth closing

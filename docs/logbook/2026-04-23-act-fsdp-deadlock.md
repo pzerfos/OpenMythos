@@ -242,6 +242,50 @@ Possible mitigations:
 This is tracked as a separate issue (pzerfos/OpenMythos#5) since it affects
 model quality independent of the FSDP fix.
 
+### Upstream finding: ACT is the root cause of depth-binding
+
+Extensive empirical work in [kyegomez/OpenMythos#28](https://github.com/kyegomez/OpenMythos/issues/28)
+(13 ablation runs, 117M params, 491M tokens each on H100) systematically ruled
+out every mechanism except ACT as the cause of training-depth binding:
+
+| Ablation | Removes the V-shape? |
+|----------|---------------------|
+| Disable `loop_index_embedding` + per-loop LoRA | No |
+| Freeze LTI injection (`log_A`, `log_dt`, `B`) | No |
+| Freeze MoE router weights | No |
+| Break recurrence (`h = trans_out` instead of LTI update) | No |
+| **Disable ACT halting (return final `h` directly)** | **Yes** |
+
+With ACT disabled + random loop count training (`disable_act_random`), the
+model produces the **only monotonically decreasing PPL curve** across inference
+depths in the entire 13-run matrix:
+
+```
+n_loops  PPL (disable_act_random)  PPL (looped_random, ACT on)
+      1   131.3                     1217.0
+      2    77.7                      401.3
+      4    62.8                       65.3
+      8    59.7                       65.2
+     12    59.5                       65.2
+     16    59.6                       65.2
+```
+
+The interpretation: ACT learns a halting policy trained in-distribution that
+goes out-of-distribution at unseen inference depths. The ACT-weighted sum
+aggregates hidden states in ways that don't match what the model was trained
+to produce. Disabling ACT forces the model to produce a usable hidden state at
+every depth.
+
+**This means our premature halting concern (issue #5) is more fundamental than
+an initialization problem.** ACT in its current form appears to be
+architecturally incompatible with depth extrapolation. The upstream conclusion:
+"in the current implementation, [ACT adaptive compute] and [depth
+extrapolation] are not both achievable simultaneously."
+
+This does not affect our current 1B PoC training run (fixed `n_loops`, ACT
+provides a valid compute optimization), but it is a critical design decision
+for future architecture iterations. See issue #5 for proposed next steps.
+
 ## Fix Validation
 
 ### Job 33841 — fix confirmed (commit 6c5659c)
@@ -296,7 +340,11 @@ exit (~2.3x) gives roughly **16x total speedup** over the original code.
 - Fix validated on BlueVela: job 33841 ran past step 1,000 (previous limit: step 33)
 - Checkpoint resume validated: job 34019 resumed from step 1,000, loss continuous
 - Job 34019 running on preemptable queue, 4 GPUs, ~1s/step, targeting 1B tokens
+  - Step 6,722 / 30,518 (22%), loss 3.91 as of 23:29 UTC
+  - Step 9,919 / 30,518 (32%), loss 3.57 as of 01:16 UTC
 - Checkpoints at `/proj/checkpoints/pzerfos/openmythos/checkpoints` (symlinked)
-- Separate concern: premature ACT halting during warmup (issue #5)
+- Upstream ACT depth-binding finding documented (kyegomez/OpenMythos#28)
+- Separate concern: premature ACT halting during warmup (issue #5), now informed
+  by upstream empirical evidence that ACT is the primary depth-binding mechanism
 - 10 new tests in `tests/test_act_fsdp_fix.py` — all pass
 - 252 total tests pass (14 pre-existing failures in test_main.py unchanged)
