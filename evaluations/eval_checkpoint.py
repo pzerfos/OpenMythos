@@ -122,8 +122,9 @@ def run_generation(
         print(f"Prompt:    {prompt}")
         print(f"Generated: {generated}")
 
-    # One greedy sample for comparison
-    print(f"\n--- Greedy decode (temperature=0) ---")
+    # One near-greedy sample for comparison (temperature=0.01 to avoid div-by-zero
+    # in model.generate which divides logits by temperature before softmax)
+    print(f"\n--- Near-greedy decode (temperature=0.01) ---")
     prompt = GENERATION_PROMPTS[0]
     input_ids = torch.tensor(
         [tokenizer.encode(prompt)], dtype=torch.long, device=device
@@ -133,7 +134,7 @@ def run_generation(
             input_ids,
             max_new_tokens=max_new_tokens,
             n_loops=n_loops,
-            temperature=0.0,
+            temperature=0.01,
             top_k=50,
         )
     print(f"Prompt:    {prompt}")
