@@ -160,53 +160,39 @@ Building `flash-attn` from source on BlueVela login node with `CUDA_HOME=/opt/sh
 
 ## Next Steps
 
-### A. Speed Up Training (Priority: High)
+> **Update 2026-04-23:** Most items below have been addressed. See
+> `2026-04-23-flash-attn-and-speedup.md` and `2026-04-23-act-fsdp-deadlock.md`
+> for current status and the consolidated next steps list.
 
-Current throughput (~2K tok/s, ~56 days for 10B tokens) is far too slow. Multiple approaches, roughly ordered by impact:
+### A. Speed Up Training — ~~RESOLVED~~
 
-1. **Flash Attention 2 (in progress)** — Building on BlueVela. Upstream already merged support into GQAttention. Should significantly speed up attention computation. MLAttention still uses manual attention and could benefit from a similar flash-attn integration in the future.
+Throughput improved from ~2K tok/s to ~33K tok/s (**16x**):
+- ~~Flash Attention 2~~ — Installed, but not the bottleneck (attention is cheap at seq_len=2048)
+- ~~MoE dispatch loop~~ — Replaced nested loop with grouped dispatch: **6.7x speedup**
+- ~~ACT early exit~~ — Restored after fixing FSDP deadlock: **~2.3x additional**
+- Remaining options: scale to 16 GPUs, `torch.compile` (requires FSDP2, issue #6),
+  gradient checkpointing for larger micro_batch
 
-2. **Optimize MoE dispatch loop** — The current implementation (`main.py:496-504`) uses a nested Python loop of 256 iterations (topk=4 × n_experts=64) per forward pass. Replace with a grouped/batched dispatch pattern (gather all tokens per expert, run expert once, scatter back). This is the single biggest throughput bottleneck. See `docs/code-review-2026-04-23.md`, issue #4.
+### B. Fix Code Review Issues — ~~MOSTLY RESOLVED~~
 
-2. **Request more GPUs (8 GPUs)** — Doubles FSDP parallelism and halves per-GPU activation memory, potentially allowing micro_batch=2 which halves grad_accum steps.
+- ~~ACT halting remainder~~ — Fixed (commit `65cd807`)
+- ~~MoE score renormalization epsilon~~ — Fixed (commit `65cd807`)
+- ~~`__init__.py` exports~~ — Fixed (commit `65cd807`)
+- ~~AdamW `fused` guard~~ — Fixed (commit `65cd807`)
+- ~~LoRAAdapter.B dtype cast~~ — Fixed (commit `65cd807`)
+- ~~`loop_index_embedding` float32 precision~~ — Fixed (commit `65cd807`)
+- ~~ACT early exit FSDP deadlock~~ — Fixed (commit `6c5659c`, issue #4)
+- **Open:** `router_bias` load balancing (issue #3), RoPE lazy extension (issue #3),
+  `amp_ctx` variable flow (issue #3)
 
-3. **Reduce recurrent loop count for PoC** — The 1B variant uses 16 loops. Training with 8 loops would roughly halve compute per step while still validating the architecture. Can increase for the full run.
+### C. Infrastructure Improvements
 
-4. **Add gradient checkpointing** — Trade compute for memory. Recompute activations during backward instead of storing them. Would allow larger micro_batch, reducing grad_accum overhead.
-
-5. **Use `torch.compile`** — JIT-compile the model for kernel fusion. Can provide 1.5-2x speedup on modern GPUs. Requires testing compatibility with FSDP + MoE.
-
-### B. Fix Code Review Issues (Priority: Medium)
-
-Full report: `docs/code-review-2026-04-23.md`
-
-**Important fixes (in priority order):**
-
-1. **ACT halting remainder for loop-exhausted positions** (`main.py`, after RecurrentBlock loop) — Positions that don't halt within `n_loops` get under-weighted output. Add final remainder assignment. Affects training quality.
-
-2. **MoE score renormalization epsilon** (`main.py:493`) — Add `.clamp(min=1e-9)` to prevent division by zero in early training with bfloat16.
-
-3. **Implement `router_bias` update** in training loop — The aux-loss-free load balancing is defined but never activated. Without it, expert collapse is likely over long runs.
-
-4. **Fix `__init__.py` exports** — Remove nonexistent `load_tokenizer` and `get_vocab_size` from `__all__`.
-
-5. **Guard `fused=True` on AdamW** — Crashes on CPU. Fix: `fused="cuda" in device`.
-
-6. **Defensive cast on `LoRAAdapter.self.B`** — Add `.to(down.dtype)` to prevent breakage if FSDP wrap policy changes.
-
-**Minor fixes:**
-7. `loop_index_embedding` trig precision — compute in float32
-8. Causal mask dtype — create in model dtype to avoid float32 promotion
-9. Implement RoPE lazy extension (documented but missing)
-10. Clean up `amp_ctx` variable flow in training scripts
-
-### C. Infrastructure Improvements (Priority: Low)
-
-1. **ClearML via proxy or VPN** — Explore whether BlueVela compute nodes can reach the ClearML server through an internal proxy, rather than relying on log files only.
-
-2. **Pre-tokenize dataset** — Tokenize FineWeb-Edu once and save as numpy/memmap arrays. Eliminates per-step tokenization CPU cost.
-
-3. **Multi-node training** — Current setup is single-node multi-GPU. For scaling beyond 8 GPUs, need multi-node FSDP with proper `torchrun` rank/world setup.
+1. **ClearML via proxy or VPN** — Still not reachable from compute nodes
+2. ~~Pre-tokenize dataset~~ — Not needed; pyarrow parquet loading is fast enough
+3. **Multi-node training** — Not yet attempted; single-node 4-GPU is sufficient for 1B PoC
+4. **FSDP2 migration** (issue #6) — Lower GPU memory, torch.compile, simpler checkpointing
+5. **ACT architecture decision** (issue #5) — ACT vs depth extrapolation tradeoff;
+   upstream empirical evidence in `docs/arch-analysis/act-depth-extrapolation-analysis.md`
 
 ---
 
