@@ -36,9 +36,8 @@ CLEARML_PROJECT="${CLEARML_PROJECT:-granite-mythos}"
 EXPERIMENT_NAME="${EXPERIMENT_NAME:-1b-10b-tokens}"
 DATASET_PATH="${DATASET_PATH:-/proj/datasets/pzerfos/fineweb-edu-100B/sample/100BT}"
 
-NUM_NODES=2
+NUM_NODES=1
 GPUS_PER_NODE=8
-MASTER_PORT=29500
 QUEUE=preemptable
 BSUB_GROUP=grp_preemptable
 JOB_NAME="pz-mythos-1b-10b"
@@ -53,8 +52,7 @@ ERR_FILE="${LOG_DIR}/${DATE}.err"
 echo "========================================="
 echo "  OpenMythos 1B — 10B Token Scale-Up"
 echo "========================================="
-echo "  Nodes:         $NUM_NODES"
-echo "  GPUs/node:     $GPUS_PER_NODE  (total: $((NUM_NODES * GPUS_PER_NODE)))"
+echo "  GPUs:          $GPUS_PER_NODE (single node)"
 echo "  Target tokens: ${TARGET_TOKENS}B"
 echo "  Output dir:    $OUTPUT_DIR"
 echo "  Dataset:       $DATASET_PATH"
@@ -82,19 +80,9 @@ bsub \
     OUTPUT_DIR="${OUTPUT_DIR}" \
     TARGET_TOKENS="${TARGET_TOKENS}" \
     DATASET_PATH="${DATASET_PATH}" \
-    MASTER_PORT="${MASTER_PORT}" \
-    NUM_NODES="${NUM_NODES}" \
-    GPUS_PER_NODE="${GPUS_PER_NODE}" \
     bash -c "
-        source \$(conda info --base)/etc/profile.d/conda.sh
-        conda activate openmythos
-        cd ${REPO_DIR}
-        MASTER_ADDR=\$(echo \$LSB_HOSTS | awk '{print \$1}')
-        echo \"Rank info: MASTER_ADDR=\${MASTER_ADDR} MASTER_PORT=${MASTER_PORT} NNODES=${NUM_NODES} GPUS_PER_NODE=${GPUS_PER_NODE}\"
-        torchrun \
-            --nnodes=${NUM_NODES} \
-            --nproc_per_node=${GPUS_PER_NODE} \
-            --rdzv_backend=c10d \
-            --rdzv_endpoint=\${MASTER_ADDR}:${MASTER_PORT} \
-            training/1b_poc_fineweb.py
+        source \$(conda info --base)/etc/profile.d/conda.sh &&
+        conda activate openmythos &&
+        cd ${REPO_DIR} &&
+        torchrun --nproc_per_node=${GPUS_PER_NODE} training/1b_poc_fineweb.py
     "
