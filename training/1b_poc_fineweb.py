@@ -276,7 +276,6 @@ def save_checkpoint(
             logger.warning(f"Failed to prune old checkpoint {old}: {exc}")
 
     logger.success(f"Checkpoint saved -> {final_path}")
-    register_clearml_artifact(f"checkpoint_step_{step}", final_path)
 
 
 def load_checkpoint(model, optimizer, path: str, ddp: bool) -> int:
