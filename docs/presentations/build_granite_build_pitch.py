@@ -92,6 +92,116 @@ def add_footer_band(slide, text):
     r.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
 
 
+def add_container_box(slide, left, top, width, height, header, items,
+                      header_color=NAVY, body_color=LIGHT):
+    """Labeled container with a colored header strip and stacked inner rows."""
+    outer = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, left, top, width, height)
+    outer.fill.solid()
+    outer.fill.fore_color.rgb = RGBColor(0xFA, 0xFA, 0xFA)
+    outer.line.color.rgb = header_color
+    outer.line.width = Pt(1.5)
+    outer.text_frame.text = ""
+
+    header_h = Inches(0.4)
+    hdr = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, left, top, width, header_h)
+    hdr.fill.solid()
+    hdr.fill.fore_color.rgb = header_color
+    hdr.line.fill.background()
+    tf = hdr.text_frame
+    tf.margin_top = Inches(0.03)
+    tf.margin_bottom = Inches(0.03)
+    p = tf.paragraphs[0]
+    p.alignment = 1
+    r = p.add_run()
+    r.text = header
+    r.font.size = Pt(13)
+    r.font.bold = True
+    r.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
+
+    inner_top = top + header_h + Inches(0.08)
+    inner_left = left + Inches(0.12)
+    inner_w = width - Inches(0.24)
+    avail_h = (top + height) - inner_top - Inches(0.08)
+    gap = Inches(0.06)
+    item_h = (avail_h - gap * (len(items) - 1)) / len(items)
+    for item in items:
+        ib = slide.shapes.add_shape(
+            MSO_SHAPE.RECTANGLE, inner_left, inner_top, inner_w, item_h
+        )
+        ib.fill.solid()
+        ib.fill.fore_color.rgb = body_color
+        ib.line.color.rgb = header_color
+        ib.line.width = Pt(0.5)
+        tfi = ib.text_frame
+        tfi.word_wrap = True
+        tfi.margin_left = Inches(0.08)
+        tfi.margin_right = Inches(0.08)
+        pi = tfi.paragraphs[0]
+        pi.alignment = 1
+        ri = pi.add_run()
+        ri.text = item
+        ri.font.size = Pt(11)
+        ri.font.bold = True
+        ri.font.color.rgb = BLACK
+        inner_top = inner_top + item_h + gap
+
+
+def add_labeled_arrow(slide, left, top, width, height, label, color=ACCENT):
+    arrow = slide.shapes.add_shape(MSO_SHAPE.RIGHT_ARROW, left, top, width, height)
+    arrow.fill.solid()
+    arrow.fill.fore_color.rgb = color
+    arrow.line.fill.background()
+    lbl = slide.shapes.add_textbox(
+        left - Inches(0.1), top - Inches(0.32), width + Inches(0.2), Inches(0.28)
+    )
+    p = lbl.text_frame.paragraphs[0]
+    p.alignment = 1
+    r = p.add_run()
+    r.text = label
+    r.font.size = Pt(10)
+    r.font.bold = True
+    r.font.italic = True
+    r.font.color.rgb = color
+
+
+def add_banner(slide, left, top, width, height, text,
+               color=NAVY, text_color=None, font_size=13, italic=False):
+    if text_color is None:
+        text_color = RGBColor(0xFF, 0xFF, 0xFF)
+    box = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, left, top, width, height)
+    box.fill.solid()
+    box.fill.fore_color.rgb = color
+    box.line.fill.background()
+    tf = box.text_frame
+    tf.word_wrap = True
+    p = tf.paragraphs[0]
+    p.alignment = 1
+    r = p.add_run()
+    r.text = text
+    r.font.size = Pt(font_size)
+    r.font.bold = True
+    r.font.italic = italic
+    r.font.color.rgb = text_color
+
+
+def add_down_arrow(slide, left, top, width, height, color=ACCENT):
+    arrow = slide.shapes.add_shape(MSO_SHAPE.DOWN_ARROW, left, top, width, height)
+    arrow.fill.solid()
+    arrow.fill.fore_color.rgb = color
+    arrow.line.fill.background()
+
+
+def add_schematic_caption(slide, left, top, width, text):
+    box = slide.shapes.add_textbox(left, top, width, Inches(0.3))
+    p = box.text_frame.paragraphs[0]
+    p.alignment = 1
+    r = p.add_run()
+    r.text = text
+    r.font.size = Pt(11)
+    r.font.italic = True
+    r.font.color.rgb = GREY
+
+
 def add_workflow_band(slide, top):
     steps = [
         "edit locally",
@@ -200,34 +310,75 @@ def slide2(prs):
         "Collapse the submit-SSH-tail loop into submit → poll → inspect",
     )
 
-    # Left column: sandbox
-    add_bullets(
-        slide,
-        Inches(0.5), Inches(1.45), Inches(6.2), Inches(5.2),
+    # --- Schematic: Sandbox → gbserver → Backends (design doc §2) ---
+    sch_top = Inches(1.45)
+    sch_h = Inches(2.55)
+
+    add_container_box(
+        slide, Inches(0.4), sch_top, Inches(4.2), sch_h,
+        "Sandbox (OpenShell · k8s-sig)",
         [
-            "Persistent container (OpenShell) with Claude Code, Git, Docker/Podman, Python",
-            "Optional local GPU for prototyping before scaling out",
-            "Persists across sessions — decoupled from the laptop; no laptop ↔ cluster tunnel",
-            "Safe execution: preflight validation, space-scoped credentials and artifacts",
-            "Agent Guide tells Claude Code which MCP tools exist and when to use each",
+            "Claude Code + MCP client",
+            "Git · Docker/Podman · Python",
+            "Local GPU (optional, for dev)",
         ],
-        title="a) Safe, persistent agent sandbox with a GPU",
-        body_size=13,
+    )
+    add_labeled_arrow(
+        slide, Inches(4.7), sch_top + Inches(1.05), Inches(0.55), Inches(0.4), "MCP"
+    )
+    add_container_box(
+        slide, Inches(5.35), sch_top, Inches(5.3), sch_h,
+        "Granite.build (gbserver)",
+        [
+            "MCP Server — 10 tools (submit, status, discover, plans)",
+            "BuildWatch · BuildRunner · preflight validation",
+            "Storage · Artifacts · Lineage · Provenance",
+        ],
+    )
+    add_labeled_arrow(
+        slide,
+        Inches(10.75), sch_top + Inches(1.05), Inches(0.55), Inches(0.4),
+        "dispatch",
+    )
+    add_container_box(
+        slide, Inches(11.4), sch_top, Inches(1.55), sch_h,
+        "Backends",
+        [
+            "Docker / Podman",
+            "RunPod (cloud)",
+            "SkyPilot · k8s · Slurm",
+        ],
     )
 
-    # Right column: scale mediation
+    add_schematic_caption(
+        slide,
+        Inches(0.4), Inches(4.05), Inches(12.6),
+        "Backends fetch code (git), images (registry), and artifacts "
+        "(S3 · HF · COS) directly — never through MCP or the agent.",
+    )
+
+    # --- Condensed bullets below schematic ---
     add_bullets(
         slide,
-        Inches(6.95), Inches(1.45), Inches(6.0), Inches(5.2),
+        Inches(0.5), Inches(4.45), Inches(6.2), Inches(2.35),
         [
-            "Control-plane-only: build specs reference commit SHAs + content-addressed images — no data moves through the agent",
-            "Deterministic, reproducible runs with artifact lineage and provenance",
-            "Compute backends (Bash / Docker / RunPod; later K8s/LSF) fetch code, images, and artifacts themselves",
-            "10 MCP tools let the agent discover steps, environments, quotas, and submit jobs directly",
-            "Preflight validation blocks bad specs before a GPU is ever allocated",
+            "Persistent container, decoupled from laptop — survives across sessions",
+            "Local GPU for prototyping before scaling out",
+            "Safe execution: preflight checks, space-scoped credentials + artifacts",
         ],
-        title="b) Granite.build as the scale mediation layer",
-        body_size=13,
+        title="a) Safe, persistent agent sandbox",
+        body_size=12,
+    )
+    add_bullets(
+        slide,
+        Inches(6.95), Inches(4.45), Inches(6.0), Inches(2.35),
+        [
+            "Control plane only — specs pin commit SHAs + image URIs",
+            "10 MCP tools: discover steps/envs/quotas, submit, poll, retrieve",
+            "Deterministic runs; artifact lineage and provenance by construction",
+        ],
+        title="b) Granite.build as scale mediation",
+        body_size=12,
     )
 
     add_footer_band(
@@ -240,44 +391,60 @@ def slide3(prs):
     slide = prs.slides.add_slide(prs.slide_layouts[6])
     add_title(
         slide,
-        "Flight plans + logbooks — external memory for experiments",
-        "The intent, the methodology, and the daily record — all durable and searchable",
+        "From sandbox to at-scale — packaging + submission",
+        "Claude Code helps with development, packaging, AND the build.yaml submission",
     )
 
-    # Left column: flight plans
-    add_bullets(
+    # --- Shared starting banner ---
+    add_banner(
         slide,
-        Inches(0.5), Inches(1.45), Inches(6.2), Inches(5.2),
-        [
-            "Co-authored with the agent in the sandbox; captures the what and the why",
-            "Level 1 — Intent (human narrative)",
-            "Level 2 — Methodology (structured steps, dependencies)",
-            "Level 3 — Execution (build.yaml, derived at submit time)",
-            "Append-only revision history; one plan spawns many builds as you iterate",
-            "Every job carries plan_id → build → artifact — provenance by construction",
-        ],
-        title="Flight plans: durable intent",
-        body_size=13,
+        Inches(3.17), Inches(1.45), Inches(7.0), Inches(0.55),
+        "Local dev iterations complete in the sandbox — code runs end-to-end",
     )
 
-    # Right column: logbooks
-    add_bullets(
-        slide,
-        Inches(6.95), Inches(1.45), Inches(6.0), Inches(5.2),
+    # Fork arrows into the two path columns
+    add_down_arrow(slide, Inches(3.3), Inches(2.1), Inches(0.35), Inches(0.3))
+    add_down_arrow(slide, Inches(9.7), Inches(2.1), Inches(0.35), Inches(0.3))
+
+    # --- Path A: Git push → Bring-Your-Own-Step ---
+    add_container_box(
+        slide, Inches(0.4), Inches(2.5), Inches(6.2), Inches(2.7),
+        "Path A — Git push → Bring-Your-Own-Step (BYOS)",
         [
-            "Daily record of what was achieved, decided, or ruled out — not raw transcripts",
-            "Searchable, shareable, persistent external record of agent sessions",
-            "Future retrieval: answer months later why micro_batch=1 or why MLA over GQA",
-            "Example: the 475-SSH audit was reconstructed from session transcripts — logbooks make this first-class",
-            "Pairs with flight plans: the plan says what we meant to do, the logbook says what actually happened",
+            "Commit & push to GitHub (pin commit SHA, not a branch ref)",
+            "Claude Code authors a custom_code step (BYOS) referencing github_url",
+            "Backend clones repo, runs setup_command then start_command",
         ],
-        title="Logbooks: durable history",
-        body_size=13,
+    )
+
+    # --- Path B: Docker image → Bring-Your-Own-Image ---
+    add_container_box(
+        slide, Inches(6.73), Inches(2.5), Inches(6.2), Inches(2.7),
+        "Path B — Docker image → Bring-Your-Own-Image (BYOI)",
+        [
+            "Claude Code writes Dockerfile — faithful conda-env reproduction",
+            "Build + push to registry with content-addressed tag (not :latest)",
+            "Claude Code authors a custom_code step (BYOI) — backend pulls the image",
+        ],
+    )
+
+    # Merge arrows from path boxes into the submit banner
+    add_down_arrow(slide, Inches(3.3), Inches(5.25), Inches(0.35), Inches(0.3))
+    add_down_arrow(slide, Inches(9.7), Inches(5.25), Inches(0.35), Inches(0.3))
+
+    # --- Converging banner: Claude Code writes build.yaml, submits via gbserver ---
+    add_container_box(
+        slide, Inches(1.4), Inches(5.65), Inches(10.53), Inches(1.15),
+        "Claude Code constructs the build.yaml → submit_job (Granite.build)",
+        [
+            "At-scale execution on backends (Docker · RunPod · SkyPilot · k8s · Slurm)",
+            "Artifacts registered automatically with lineage + provenance",
+        ],
     )
 
     add_footer_band(
         slide,
-        "Conversations end. Flight plans and logbooks remain — and can be searched, shared, and resumed.",
+        "Two paths, one control plane — Claude Code assists from the first commit to the last artifact.",
     )
 
 
