@@ -25,6 +25,7 @@ Environment variables (optional):
 
 import os
 import math
+import random
 import time
 import torch
 import torch.nn as nn
@@ -397,6 +398,12 @@ def main():
     # ------------------------------------------------------------------
     # Hyperparameters (env-var configurable with defaults)
     # ------------------------------------------------------------------
+    # Recurrent-depth training recipe (Option A: ACT, Option B: stochastic depth).
+    # Change recurrent_mode to "act" to use the original ACT halting recipe.
+    recurrent_mode = "stochastic_depth"  # "act" or "stochastic_depth"
+    stochastic_depth_min = 1
+    stochastic_depth_max = 32
+
     seq_len = 2048
     micro_batch = 1
     target_tokens_b = int(os.environ.get("TARGET_TOKENS", "10"))
@@ -436,6 +443,9 @@ def main():
         "dataset_path": dataset_path,
         "dataset_subset": dataset_subset,
         "world_size": world_size,
+        "recurrent_mode": recurrent_mode,
+        "stochastic_depth_min": stochastic_depth_min,
+        "stochastic_depth_max": stochastic_depth_max,
     }
 
     if master:
@@ -482,6 +492,15 @@ def main():
     if master:
         n_params = sum(p.numel() for p in model.parameters())
         logger.info(f"Parameters: {n_params:,}  |  AMP dtype: {amp_dtype}")
+
+    if master:
+        if recurrent_mode == "stochastic_depth":
+            logger.info(
+                f"Recurrent mode: stochastic_depth "
+                f"(n_loops sampled uniformly from [{stochastic_depth_min}, {stochastic_depth_max}])"
+            )
+        else:
+            logger.info(f"Recurrent mode: act (n_loops = cfg.max_loop_iters = {cfg.max_loop_iters})")
 
     # ------------------------------------------------------------------
     # ClearML init (after model is built so we can log config)
@@ -552,8 +571,19 @@ def main():
                 if (not ddp or micro_step == grad_accum - 1)
                 else model.no_sync()
             )
+            if recurrent_mode == "stochastic_depth":
+                n_loops_this_step = random.randint(stochastic_depth_min, stochastic_depth_max)
+                bypass_act_this_step = True
+            else:
+                n_loops_this_step = None
+                bypass_act_this_step = False
+
             with sync, amp_ctx:
-                logits = model(x)
+                logits = model(
+                    x,
+                    n_loops=n_loops_this_step,
+                    bypass_act=bypass_act_this_step,
+                )
                 loss = nn.functional.cross_entropy(
                     logits.view(-1, vocab_size), y.view(-1)
                 )
@@ -574,11 +604,17 @@ def main():
             tok_per_sec = global_batch_tok * log_every / dt
             tokens_seen = step * global_batch_tok
 
+            n_loops_display = (
+                n_loops_this_step
+                if n_loops_this_step is not None
+                else cfg.max_loop_iters
+            )
             logger.info(
                 f"step {step:6d}/{total_steps} | loss {loss_accum:.4f} "
                 f"| gnorm {float(grad_norm):.2f} | lr {cur_lr:.2e} "
                 f"| {tok_per_sec / 1e6:.2f}M tok/s "
-                f"| {tokens_seen / 1e9:.1f}B tokens seen"
+                f"| {tokens_seen / 1e9:.1f}B tokens seen "
+                f"| mode={recurrent_mode} n_loops={n_loops_display}"
             )
 
             log_clearml("loss", loss_accum, step)
@@ -586,6 +622,7 @@ def main():
             log_clearml("lr", cur_lr, step)
             log_clearml("throughput_mtok_s", tok_per_sec / 1e6, step)
             log_clearml("tokens_seen_B", tokens_seen / 1e9, step)
+            log_clearml("n_loops", float(n_loops_display), step)
 
             t0 = time.perf_counter()
 
