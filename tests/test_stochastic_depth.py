@@ -116,7 +116,7 @@ def test_openmythos_forward_bypass_act_propagates():
 
 
 def test_state_dict_compatible_across_modes(tmp_path):
-    """A checkpoint saved before toggling bypass_act should load without key mismatch."""
+    """state_dict round-trips cleanly and the loaded model works in both ACT and bypass modes."""
     cfg = _small_cfg()
     torch.manual_seed(0)
     model_a = OpenMythos(cfg)
@@ -126,9 +126,9 @@ def test_state_dict_compatible_across_modes(tmp_path):
     torch.manual_seed(1)
     model_b = OpenMythos(cfg)
     state = torch.load(ckpt_path, map_location="cpu")
-    missing, unexpected = model_b.load_state_dict(state, strict=True)
-    assert not missing, f"unexpected missing keys: {missing}"
-    assert not unexpected, f"unexpected extra keys: {unexpected}"
+    # strict=True raises if any keys are missing or unexpected, which is the
+    # actual compatibility check.
+    model_b.load_state_dict(state, strict=True)
 
     input_ids = torch.randint(0, cfg.vocab_size, (2, 8))
     torch.manual_seed(2)
@@ -136,3 +136,5 @@ def test_state_dict_compatible_across_modes(tmp_path):
     torch.manual_seed(2)
     logits_bypass = model_b(input_ids, n_loops=3, bypass_act=True)
     assert logits_act.shape == logits_bypass.shape
+    assert torch.isfinite(logits_act).all(), "ACT logits must be finite"
+    assert torch.isfinite(logits_bypass).all(), "bypass logits must be finite"
