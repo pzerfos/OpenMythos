@@ -168,35 +168,36 @@ d1c51b2 fix(eval): use temperature=0.01 instead of 0.0 for greedy decode
 
 ## Next Steps
 
-### Immediate
+> **Update 2026-04-28:** Several items below are resolved. Current status:
 
-1. **Decide on ACT** (pzerfos/OpenMythos#5) — The depth sweep confirms ACT
-   depth-binding. Three options remain:
-   - **A.** Keep ACT, accept fixed-depth operation (current state)
-   - **B.** Disable ACT, train with stochastic depth sampling — enables
-     depth extrapolation per upstream findings
-   - **C.** Replace ACT weighted sum with soft attention over loop outputs
-     (untested)
+### Closed
 
-2. **Scale to 10B tokens on 16 GPUs** — The 1B PoC validates the full
-   pipeline. Submit a longer run on the normal queue (`-q normal -G grp_granite_`)
-   with 16 GPUs for ~2.5 days to 10B tokens.
+1. ~~**Decide on ACT**~~ — **Resolved**: chose Option B. Implemented as a
+   switchable recipe (`recurrent_mode = "act" | "stochastic_depth"`) while
+   preserving Option A as an alternative. See
+   `docs/logbook/2026-04-28-option-b-and-upstream-pr.md` and
+   `docs/superpowers/specs/2026-04-27-stochastic-depth-training-design.md`.
+
+2. ~~**Scale to 10B tokens**~~ — **In progress** as job 56429 on BlueVela
+   (preemptable queue, 8 GPUs single node, not 16 GPUs across 2 nodes — the
+   multi-node `blaunch` path hit an env-var forwarding bug and was deferred).
+   Step ~55k of 305k as of 2026-04-28 04:22 UTC.
+
+### Still Open
 
 3. **Add lm-eval-harness integration** — Standard benchmarks (HellaSwag, ARC,
    MMLU) would allow comparison with published results for similarly-sized
    models.
 
-### Deferred
-
 4. **Fix 14 pre-existing test failures** — RoPE dimension mismatch after
-   upstream flash-attn merge (13 tests) + LTI spectral radius boundary (1 test)
+   upstream flash-attn merge (13 tests) + LTI spectral radius boundary (1 test).
 
 5. **router_bias load balancing** (pzerfos/OpenMythos#3) — Most impactful
    deferred code review item. Expert utilization imbalance grows with longer
    training.
 
 6. **FSDP1 -> FSDP2 migration** (pzerfos/OpenMythos#6) — Lower memory,
-   torch.compile support. Worth doing before the 10B run.
+   torch.compile support. Worth doing before the next larger-scale run.
 
 7. **Study Gated DeltaNet** — Qwen3.6's hybrid attention is a generation ahead
    for long-context efficiency. Worth investigating for future OpenMythos
