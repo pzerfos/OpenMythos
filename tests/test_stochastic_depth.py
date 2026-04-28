@@ -95,3 +95,21 @@ def test_recurrent_block_bypass_act_returns_final_h():
     assert torch.allclose(out_bypass, h_manual, atol=1e-5), (
         "bypass_act=True should return the final hidden state after n_loops iterations"
     )
+
+
+def test_openmythos_forward_bypass_act_propagates():
+    """OpenMythos.forward(bypass_act=True) should route through RecurrentBlock with bypass_act=True."""
+    cfg = _small_cfg()
+    torch.manual_seed(0)
+    model = OpenMythos(cfg)
+    input_ids = torch.randint(0, cfg.vocab_size, (2, 8))
+
+    torch.manual_seed(1)
+    logits_act = model(input_ids, n_loops=3, bypass_act=False)
+    torch.manual_seed(1)
+    logits_bypass = model(input_ids, n_loops=3, bypass_act=True)
+
+    assert logits_act.shape == logits_bypass.shape
+    assert not torch.allclose(logits_act, logits_bypass, atol=1e-6), (
+        "bypass_act should change model output"
+    )

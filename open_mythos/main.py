@@ -1057,20 +1057,24 @@ class OpenMythos(nn.Module):
         n_loops: Optional[int] = None,
         kv_cache: Optional[dict] = None,
         start_pos: int = 0,
+        bypass_act: bool = False,
     ) -> torch.Tensor:
         """
         Forward pass through Prelude → Recurrent Block → Coda.
 
         Args:
-            input_ids -- token indices of shape (B, T)
-            n_loops   -- recurrent loop depth; defaults to cfg.max_loop_iters.
-                         Increase at inference to extrapolate to harder problems.
-            kv_cache  -- dict mutated in-place for autoregressive KV caching;
-                         pass an empty dict {} and reuse across decode steps
-            start_pos -- index of the first token in input_ids within the full
-                         sequence; used to select the correct RoPE frequencies
-                         during incremental decoding (0 for prefill, prompt_len
-                         for each subsequent decode step)
+            input_ids  -- token indices of shape (B, T)
+            n_loops    -- recurrent loop depth; defaults to cfg.max_loop_iters.
+                          Increase at inference to extrapolate to harder problems.
+            kv_cache   -- dict mutated in-place for autoregressive KV caching;
+                          pass an empty dict {} and reuse across decode steps
+            start_pos  -- index of the first token in input_ids within the full
+                          sequence; used to select the correct RoPE frequencies
+                          during incremental decoding (0 for prefill, prompt_len
+                          for each subsequent decode step)
+            bypass_act -- if True, RecurrentBlock skips ACT weighting and returns
+                          the final hidden state directly. Default False preserves
+                          the existing ACT behavior.
 
         Returns:
             Logits of shape (B, T, vocab_size)
@@ -1088,7 +1092,7 @@ class OpenMythos(nn.Module):
             x = layer(x, freqs_cis, mask, kv_cache, cache_key=f"prelude_{i}")
 
         e = x  # encoded input frozen for injection every loop
-        x = self.recurrent(x, e, freqs_cis, mask, n_loops, kv_cache)
+        x = self.recurrent(x, e, freqs_cis, mask, n_loops, kv_cache, bypass_act)
 
         for i, layer in enumerate(self.coda):
             x = layer(x, freqs_cis, mask, kv_cache, cache_key=f"coda_{i}")
