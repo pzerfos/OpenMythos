@@ -857,22 +857,28 @@ class RecurrentBlock(nn.Module):
         mask: Optional[torch.Tensor] = None,
         n_loops: Optional[int] = None,
         kv_cache: Optional[dict] = None,
+        bypass_act: bool = False,
     ) -> torch.Tensor:
         """
-        Run the recurrent loop for up to n_loops iterations with ACT early exit.
+        Run the recurrent loop for up to n_loops iterations.
 
         Args:
-            h        -- initial hidden state from the Prelude, shape (B, T, dim)
-            e        -- encoded input frozen for injection each step, shape (B, T, dim)
-            freqs_cis-- precomputed RoPE frequencies
-            mask     -- additive causal mask or None
-            n_loops  -- number of loop iterations; defaults to cfg.max_loop_iters.
-                        Can be increased at inference for deeper reasoning (depth extrapolation).
-            kv_cache -- cache dict passed through to the inner TransformerBlock;
-                        each loop iteration uses a separate cache key
+            h          -- initial hidden state from the Prelude, shape (B, T, dim)
+            e          -- encoded input frozen for injection each step, shape (B, T, dim)
+            freqs_cis  -- precomputed RoPE frequencies
+            mask       -- additive causal mask or None
+            n_loops    -- number of loop iterations; defaults to cfg.max_loop_iters.
+                          Can be increased at inference for deeper reasoning (depth extrapolation).
+            kv_cache   -- cache dict passed through to the inner TransformerBlock;
+                          each loop iteration uses a separate cache key
+            bypass_act -- if True, skip ACT weighting and return the final h directly
+                          after running all n_loops iterations (used for Option B
+                          stochastic-depth training).
 
         Returns:
-            ACT-weighted sum of hidden states across iterations, shape (B, T, dim)
+            ACT-weighted sum of hidden states across iterations when bypass_act=False,
+            or the final hidden state after n_loops iterations when bypass_act=True.
+            Shape: (B, T, dim) in both cases.
         """
         n_loops = n_loops or self.cfg.max_loop_iters
         B, T, D = h.shape
@@ -888,6 +894,9 @@ class RecurrentBlock(nn.Module):
             trans_out = self.block(combined, freqs_cis, mask, kv_cache, cache_key)
             trans_out = trans_out + self.lora(trans_out, t)
             h = self.injection(h, e, trans_out)
+
+            if bypass_act:
+                continue
 
             p = self.act(h)  # (B, T)
             still_running = ~halted
@@ -932,13 +941,15 @@ class RecurrentBlock(nn.Module):
                 if all_halted:
                     break
 
+        if bypass_act:
+            return h
+
         # Assign remainder weight for positions that never halted within n_loops.
         # Without this, non-halted positions have weights summing to < 1.0.
         not_halted = ~halted
         if not_halted.any():
             final_remainder = (1.0 - cumulative_p).clamp(min=0) * not_halted.float()
             h_out = h_out + final_remainder.unsqueeze(-1) * h
-
         return h_out
 
 
