@@ -113,3 +113,26 @@ def test_openmythos_forward_bypass_act_propagates():
     assert not torch.allclose(logits_act, logits_bypass, atol=1e-6), (
         "bypass_act should change model output"
     )
+
+
+def test_state_dict_compatible_across_modes(tmp_path):
+    """A checkpoint saved before toggling bypass_act should load without key mismatch."""
+    cfg = _small_cfg()
+    torch.manual_seed(0)
+    model_a = OpenMythos(cfg)
+    ckpt_path = tmp_path / "model.pt"
+    torch.save(model_a.state_dict(), ckpt_path)
+
+    torch.manual_seed(1)
+    model_b = OpenMythos(cfg)
+    state = torch.load(ckpt_path, map_location="cpu")
+    missing, unexpected = model_b.load_state_dict(state, strict=True)
+    assert not missing, f"unexpected missing keys: {missing}"
+    assert not unexpected, f"unexpected extra keys: {unexpected}"
+
+    input_ids = torch.randint(0, cfg.vocab_size, (2, 8))
+    torch.manual_seed(2)
+    logits_act = model_b(input_ids, n_loops=3, bypass_act=False)
+    torch.manual_seed(2)
+    logits_bypass = model_b(input_ids, n_loops=3, bypass_act=True)
+    assert logits_act.shape == logits_bypass.shape
