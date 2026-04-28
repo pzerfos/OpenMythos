@@ -556,6 +556,28 @@ def main():
         optimizer.zero_grad()
         loss_accum = 0.0
 
+        # Sample n_loops once per optimizer step. With FSDP/DDP, all ranks must
+        # run the same number of recurrent iterations to avoid all-gather
+        # ordering mismatch (same bug class as the ACT early-exit deadlock in
+        # commit 6c5659c). Broadcast from rank 0 so all ranks agree.
+        if recurrent_mode == "stochastic_depth":
+            if master:
+                n_loops_this_step = random.randint(
+                    stochastic_depth_min, stochastic_depth_max
+                )
+            else:
+                n_loops_this_step = 0
+            if ddp:
+                nl_tensor = torch.tensor(
+                    [n_loops_this_step], device=device, dtype=torch.int64
+                )
+                dist.broadcast(nl_tensor, src=0)
+                n_loops_this_step = int(nl_tensor.item())
+            bypass_act_this_step = True
+        else:
+            n_loops_this_step = None
+            bypass_act_this_step = False
+
         for micro_step in range(grad_accum):
             try:
                 x, y = next(data_iter)
@@ -571,12 +593,6 @@ def main():
                 if (not ddp or micro_step == grad_accum - 1)
                 else model.no_sync()
             )
-            if recurrent_mode == "stochastic_depth":
-                n_loops_this_step = random.randint(stochastic_depth_min, stochastic_depth_max)
-                bypass_act_this_step = True
-            else:
-                n_loops_this_step = None
-                bypass_act_this_step = False
 
             with sync, amp_ctx:
                 logits = model(
