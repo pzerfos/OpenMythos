@@ -48,9 +48,9 @@ def test_recurrent_block_bypass_act_differs_from_act():
     torch.manual_seed(1)
     out_bypass = block(h.clone(), e, freqs_cis, mask, n_loops=4, bypass_act=True)
     assert out_act.shape == out_bypass.shape
-    assert not torch.allclose(out_act, out_bypass, atol=1e-6), (
-        "bypass_act=True should not equal ACT-weighted output"
-    )
+    assert not torch.allclose(
+        out_act, out_bypass, atol=1e-6
+    ), "bypass_act=True should not equal ACT-weighted output"
 
 
 def test_recurrent_block_bypass_act_runs_full_n_loops():
@@ -92,9 +92,9 @@ def test_recurrent_block_bypass_act_returns_final_h():
     torch.manual_seed(1)
     out_bypass = block(h.clone(), e, freqs_cis, mask, n_loops=n_loops, bypass_act=True)
 
-    assert torch.allclose(out_bypass, h_manual, atol=1e-5), (
-        "bypass_act=True should return the final hidden state after n_loops iterations"
-    )
+    assert torch.allclose(
+        out_bypass, h_manual, atol=1e-5
+    ), "bypass_act=True should return the final hidden state after n_loops iterations"
 
 
 def test_openmythos_forward_bypass_act_propagates():
@@ -110,9 +110,9 @@ def test_openmythos_forward_bypass_act_propagates():
     logits_bypass = model(input_ids, n_loops=3, bypass_act=True)
 
     assert logits_act.shape == logits_bypass.shape
-    assert not torch.allclose(logits_act, logits_bypass, atol=1e-6), (
-        "bypass_act should change model output"
-    )
+    assert not torch.allclose(
+        logits_act, logits_bypass, atol=1e-6
+    ), "bypass_act should change model output"
 
 
 def test_state_dict_compatible_across_modes(tmp_path):
@@ -138,3 +138,33 @@ def test_state_dict_compatible_across_modes(tmp_path):
     assert logits_act.shape == logits_bypass.shape
     assert torch.isfinite(logits_act).all(), "ACT logits must be finite"
     assert torch.isfinite(logits_bypass).all(), "bypass logits must be finite"
+
+
+def test_training_step_runs_in_each_mode():
+    """One forward+backward+optimizer step works in both modes without error."""
+    cfg = _small_cfg()
+    torch.manual_seed(0)
+    model = OpenMythos(cfg)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
+    input_ids = torch.randint(0, cfg.vocab_size, (2, 8))
+    targets = torch.randint(0, cfg.vocab_size, (2, 8))
+
+    # ACT mode
+    optimizer.zero_grad()
+    logits = model(input_ids, n_loops=None, bypass_act=False)
+    loss_act = torch.nn.functional.cross_entropy(
+        logits.view(-1, cfg.vocab_size), targets.view(-1)
+    )
+    loss_act.backward()
+    optimizer.step()
+    assert torch.isfinite(loss_act), "ACT-mode loss must be finite"
+
+    # Stochastic-depth mode
+    optimizer.zero_grad()
+    logits = model(input_ids, n_loops=3, bypass_act=True)
+    loss_sd = torch.nn.functional.cross_entropy(
+        logits.view(-1, cfg.vocab_size), targets.view(-1)
+    )
+    loss_sd.backward()
+    optimizer.step()
+    assert torch.isfinite(loss_sd), "stochastic-depth-mode loss must be finite"

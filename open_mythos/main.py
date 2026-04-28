@@ -270,7 +270,9 @@ class GQAttention(nn.Module):
             if mask is not None:
                 attn = attn + mask
             attn = F.dropout(
-                F.softmax(attn, dim=-1).to(v.dtype), p=self.dropout_p, training=self.training
+                F.softmax(attn, dim=-1).to(v.dtype),
+                p=self.dropout_p,
+                training=self.training,
             )
             out = torch.matmul(attn, v)
             out = out.transpose(1, 2).contiguous().view(B, T, -1)
@@ -518,7 +520,9 @@ class MoEFFN(nn.Module):
         scores = F.softmax(logits, dim=-1)
         _, topk_idx = (logits + self.router_bias).topk(self.topk, dim=-1)
         topk_scores = scores.gather(-1, topk_idx)
-        topk_scores = topk_scores / topk_scores.sum(dim=-1, keepdim=True).clamp(min=1e-9)
+        topk_scores = topk_scores / topk_scores.sum(dim=-1, keepdim=True).clamp(
+            min=1e-9
+        )
 
         # Grouped expert dispatch — one expert call per active expert.
         # Flatten all topk (token, expert) pairs, sort by expert ID,
@@ -586,7 +590,10 @@ def loop_index_embedding(
     """
     freqs = 1.0 / (
         theta
-        ** (torch.arange(0, loop_dim, 2, device=h.device, dtype=torch.float32) / loop_dim)
+        ** (
+            torch.arange(0, loop_dim, 2, device=h.device, dtype=torch.float32)
+            / loop_dim
+        )
     )
     angles = loop_t * freqs  # (loop_dim//2,)
     emb = torch.cat([angles.sin(), angles.cos()], dim=-1)[:loop_dim]

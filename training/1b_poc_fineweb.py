@@ -51,7 +51,6 @@ from open_mythos.main import TransformerBlock, RecurrentBlock
 from open_mythos.variants import mythos_1b
 from open_mythos.tokenizer import MythosTokenizer
 
-
 # ---------------------------------------------------------------------------
 # ClearML (lazy — only initialized on rank 0)
 # ---------------------------------------------------------------------------
@@ -88,7 +87,9 @@ def init_clearml(cfg, training_hparams: dict, timeout: int = 30):
             signal.alarm(0)
             signal.signal(signal.SIGALRM, old_handler)
     except Exception as e:
-        logger.warning(f"ClearML init failed (training continues without tracking): {e}")
+        logger.warning(
+            f"ClearML init failed (training continues without tracking): {e}"
+        )
 
 
 def log_clearml(series: str, value: float, step: int):
@@ -128,8 +129,13 @@ class FineWebEduDataset(IterableDataset):
     """
 
     def __init__(
-        self, encoding, seq_len: int, rank: int, world_size: int,
-        dataset_path: str = "", dataset_subset: str = "sample-10BT",
+        self,
+        encoding,
+        seq_len: int,
+        rank: int,
+        world_size: int,
+        dataset_path: str = "",
+        dataset_subset: str = "sample-10BT",
     ):
         self.encoding = encoding
         self.seq_len = seq_len
@@ -142,9 +148,7 @@ class FineWebEduDataset(IterableDataset):
         """Return the subset of parquet files assigned to this shard."""
         all_files = sorted(_glob.glob(os.path.join(self.dataset_path, "*.parquet")))
         if not all_files:
-            raise FileNotFoundError(
-                f"No .parquet files found in {self.dataset_path}"
-            )
+            raise FileNotFoundError(f"No .parquet files found in {self.dataset_path}")
         return [f for i, f in enumerate(all_files) if i % total_shards == shard_index]
 
     def _iter_parquet(self, shard_index: int, total_shards: int):
@@ -237,8 +241,15 @@ def _list_ckpts(ckpt_dir: str) -> list[str]:
 
 
 def save_checkpoint(
-    model, optimizer, step: int, cfg, vocab_size: int,
-    ckpt_dir: str, ddp: bool, master: bool, keep_last: int = 3,
+    model,
+    optimizer,
+    step: int,
+    cfg,
+    vocab_size: int,
+    ckpt_dir: str,
+    ddp: bool,
+    master: bool,
+    keep_last: int = 3,
 ) -> None:
     if ddp:
         with FSDP.state_dict_type(
@@ -290,7 +301,9 @@ def load_checkpoint(model, optimizer, path: str, ddp: bool) -> int:
         ):
             model.load_state_dict(ckpt["model"])
             optim_state = FSDP.optim_state_dict_to_load(
-                model=model, optim=optimizer, optim_state_dict=ckpt["optimizer"],
+                model=model,
+                optim=optimizer,
+                optim_state_dict=ckpt["optimizer"],
             )
             optimizer.load_state_dict(optim_state)
     else:
@@ -469,7 +482,9 @@ def main():
 
     if ddp:
         mp_policy = MixedPrecision(
-            param_dtype=amp_dtype, reduce_dtype=amp_dtype, buffer_dtype=amp_dtype,
+            param_dtype=amp_dtype,
+            reduce_dtype=amp_dtype,
+            buffer_dtype=amp_dtype,
         )
         wrap_policy = ModuleWrapPolicy({TransformerBlock, RecurrentBlock})
         model = FSDP(
@@ -500,7 +515,9 @@ def main():
                 f"(n_loops sampled uniformly from [{stochastic_depth_min}, {stochastic_depth_max}])"
             )
         else:
-            logger.info(f"Recurrent mode: act (n_loops = cfg.max_loop_iters = {cfg.max_loop_iters})")
+            logger.info(
+                f"Recurrent mode: act (n_loops = cfg.max_loop_iters = {cfg.max_loop_iters})"
+            )
 
     # ------------------------------------------------------------------
     # ClearML init (after model is built so we can log config)
@@ -512,7 +529,11 @@ def main():
     # Optimizer
     # ------------------------------------------------------------------
     optimizer = torch.optim.AdamW(
-        model.parameters(), lr=lr, weight_decay=wd, betas=(0.9, 0.95), fused="cuda" in device
+        model.parameters(),
+        lr=lr,
+        weight_decay=wd,
+        betas=(0.9, 0.95),
+        fused="cuda" in device,
     )
 
     # ------------------------------------------------------------------
@@ -532,8 +553,12 @@ def main():
     # Dataset + DataLoader
     # ------------------------------------------------------------------
     dataset = FineWebEduDataset(
-        encoding, seq_len, rank, world_size,
-        dataset_path=dataset_path, dataset_subset=dataset_subset,
+        encoding,
+        seq_len,
+        rank,
+        world_size,
+        dataset_path=dataset_path,
+        dataset_subset=dataset_subset,
     )
     loader = DataLoader(dataset, batch_size=micro_batch, num_workers=4, pin_memory=True)
 
