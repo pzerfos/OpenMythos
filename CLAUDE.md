@@ -1,42 +1,76 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for Claude Code (claude.ai/code) working in this repository.
 
 ## Project Overview
 
-OpenMythos is a theoretical open-source reconstruction of a **Recurrent-Depth Transformer (RDT)** architecture. The model uses a three-stage pipeline: Prelude (standard transformer blocks, run once) -> Recurrent Block (single transformer block looped T times with LTI-stable state injection) -> Coda (standard transformer blocks, run once). Key innovations include Adaptive Computation Time (ACT) halting, depth-wise LoRA, fine-grained Mixture-of-Experts (MoE), and switchable attention (GQA or Multi-Latent Attention).
+OpenMythos is an open-source reconstruction of a **Recurrent-Depth Transformer (RDT)** architecture. The model has a three-stage pipeline: Prelude (standard transformer blocks, run once) → Recurrent Block (single transformer block looped T times with LTI-stable state injection) → Coda (standard transformer blocks, run once). Key features: switchable recurrent-training recipe (ACT vs stochastic_depth), fine-grained MoE with DeepSeek-V3 aux-loss-free load balancing, depth-wise LoRA, switchable attention (GQA or Multi-Latent Attention).
 
-## Environment Setup
+The canonical state-of-the-world roadmap is maintained in the latest logbook under `docs/logbook/`. Currently: `docs/logbook/2026-04-28-option-b-and-upstream-pr.md` tracks open/closed items and forward plan; per-feature deep-dives live in dedicated date-prefixed files.
+
+## Experimentation Workflow
+
+**Dev happens on the local laptop; training happens on BlueVela.** The loop:
+
+```
+local edit → pytest → git commit → git push origin → BlueVela git pull → bsub
+```
+
+1. **Write code and tests on the laptop.** Always in the `.venv` (see below). Run `pytest tests/` before pushing — the unit suite is CPU-only and catches most regressions in under 2 min.
+2. **Push to `origin` (IBM-internal fork):** `git push origin <branch>`. Do not push to `upstream` (public) without explicit intent.
+3. **Pull on BlueVela:** `ssh pzerfos@login4.bluevela.rmf.ibm.com`, then `cd /u/pzerfos/OpenMythos && git pull`. The login node has internet; compute nodes do not.
+4. **Submit training / eval:** `bash deploy/bluevela/bsub_*.sh` from the BlueVela repo. Logs land under `/u/pzerfos/data/granite-mythos/output/experiments/errs_and_logs/`, checkpoints under `/proj/checkpoints/pzerfos/openmythos/checkpoints/`.
+
+Reference memory (persisted across Claude sessions): `BlueVela GPU server`, `BlueVela network restrictions`, `BlueVela checkpoint storage`.
+
+## Environments
+
+Two distinct environments. They are **not** interchangeable.
+
+### Local laptop — `.venv` (mandatory)
 
 ```bash
-# Create and activate a virtual environment
 python3 -m venv .venv
 source .venv/bin/activate
-
-# Install Poetry inside the venv
 pip install poetry
-
-# Install the project and all dev dependencies
 poetry install --with dev,lint,test
 ```
 
-Always activate the virtual environment before working:
+**Always activate the venv before any local work:**
 ```bash
 source .venv/bin/activate
 ```
 
-## Testing
+The venv is where `pytest`, `black`, and `ruff` run. Do not install project deps system-wide on the laptop.
+
+### BlueVela — conda env `openmythos` (mandatory)
+
+BlueVela's system Python is 3.9, below our `>=3.10` requirement. We use a dedicated conda env:
 
 ```bash
-# Run all tests
-pytest test_main.py -v              # Root-level comprehensive tests (678 lines)
-pytest tests/ -v -s                 # tests/ directory (tokenizer, RoPE debug)
-
-# Run a single test
-pytest test_main.py -v -k "test_name"
+# First-time setup (already done once):
+bash deploy/bluevela/setup_env.sh
 ```
 
-Tests run on CPU by default (small configs with dim=64, 2 experts, etc.). No GPU required for the test suite.
+LSF jobs activate it non-interactively — the bsub scripts do:
+```bash
+source $(conda info --base)/etc/profile.d/conda.sh
+conda activate openmythos
+```
+
+Never run training from the system Python on BlueVela.
+
+## Testing
+
+All tests run on CPU in the local `.venv` with small configs (dim=64, few experts). No GPU required.
+
+```bash
+source .venv/bin/activate
+pytest tests/ -v              # full suite (334 tests as of 2026-04-29)
+pytest tests/test_main.py -v -k "test_name"   # single test
+```
+
+Always run the full suite before opening a PR.
 
 ## Linting & Formatting
 
@@ -50,42 +84,57 @@ Config: line-length 88, target Python 3.10. Settings in `pyproject.toml`.
 
 ## Training
 
-```bash
-# Single GPU
-python training/3b_fine_web_edu.py
+The 1B production training script is `training/1b_poc_fineweb.py`. Legacy `training/3b_fine_web_edu.py` exists for the 3B variant.
 
-# Multi-GPU (FSDP)
-torchrun --nproc_per_node=$(python -c "import torch; print(torch.cuda.device_count())") training/3b_fine_web_edu.py
+### Submission on BlueVela
+
+```bash
+cd /u/pzerfos/OpenMythos
+bash deploy/bluevela/bsub_1b_10b.sh   # submits to preemptable queue, 8 GPUs single node
+bjobs -u pzerfos                      # check status
 ```
 
-Training uses FineWeb-Edu streaming dataset, AdamW optimizer, bfloat16 (H100/A100) or float16+GradScaler (older GPUs), linear warmup (2000 steps) then cosine decay. Training has separate dependencies in `training/requirements.txt`.
+Logs stream to `/u/pzerfos/data/granite-mythos/output/experiments/errs_and_logs/`. Checkpoints auto-resume from the latest `step_*.pt` in the checkpoint dir.
 
-## Architecture (main.py)
+### Key local knobs in `training/1b_poc_fineweb.py`
 
-The entire model lives in `open_mythos/main.py` (~1050 lines). Key class hierarchy:
+These are plain locals near the top of `main()`, not CLI flags or config fields. Edit in place, commit, push, pull on BlueVela:
 
-- **`MythosConfig`** — dataclass holding all hyperparameters (attention type, MoE config, ACT threshold, loop count, etc.)
-- **`OpenMythos(nn.Module)`** — full model: embedding -> prelude -> recurrent -> coda -> LM head (weight-tied with embeddings)
-  - **`TransformerBlock`** — pre-norm block with swappable attention + FFN
-    - **`GQAttention`** — Grouped Query Attention with KV cache
-    - **`MLAttention`** — Multi-Latent Attention (DeepSeek-V2 style); caches compressed `c_kv` + `k_rope` (~10-20x smaller cache)
-    - **`MoEFFN`** — fine-grained MoE with shared + routed experts, aux-loss-free load balancing
-    - **`Expert`** — single SwiGLU FFN (`down(silu(gate(x)) * up(x))`)
-  - **`RecurrentBlock`** — the looped core: at each iteration applies transformer block, depth-wise LoRA, LTI injection, and accumulates ACT halting weights
-    - **`LTIInjection`** — linear time-invariant state update with guaranteed spectral radius < 1 (ZOH discretization)
-    - **`ACTHalting`** — per-position adaptive halting probability; early-converging positions stop looping
-    - **`LoRAAdapter`** — per-loop-index low-rank adaptation with depth scaling
+- **`recurrent_mode`** — `"stochastic_depth"` (default) or `"act"`. Stochastic_depth samples `n_loops` uniformly from `[stochastic_depth_min, stochastic_depth_max]` per optimizer step (broadcast from rank 0 to prevent FSDP collective-ordering deadlock). ACT uses the original adaptive halting recipe. Checkpoints are cross-mode compatible.
+- **`stochastic_depth_min`, `stochastic_depth_max`** — defaults `1` and `32`.
+- **`router_bias_update_rate`** — DeepSeek-V3 aux-loss-free load balancing. Default `0.0` (disabled). Set to `1e-3` at the next scale-up to enable periodic `router_bias` updates after each optimizer step. Emits `router_imbalance_{max_over_mean,stddev_over_mean,ratio}` to ClearML when > 0.
+
+## Architecture
+
+The entire model lives in `open_mythos/main.py`. Key class hierarchy:
+
+- **`MythosConfig`** — dataclass holding all hyperparameters.
+- **`OpenMythos(nn.Module)`** — embedding → prelude → recurrent → coda → LM head (weight-tied with embeddings). `forward(..., bypass_act: bool)` routes between ACT and stochastic_depth modes. `update_router_biases(rate, ddp)` applies DeepSeek-V3 Algorithm 1 across every MoE layer.
+  - **`TransformerBlock`** — pre-norm block with swappable attention + FFN.
+    - **`GQAttention`** — Grouped Query Attention with KV cache. Uses Flash Attention 2 when installed, falls back to manual attention otherwise.
+    - **`MLAttention`** — Multi-Latent Attention (DeepSeek-V2 style); caches compressed `c_kv` + `k_rope` (~10-20× smaller cache).
+    - **`MoEFFN`** — fine-grained MoE with shared + routed experts. Aux-loss-free load balancing via `router_bias`; `expert_counts` accumulate in `forward`, `update_router_bias(rate, ddp)` all-reduces and shifts bias by `-rate * sign(counts - target)`. Grouped dispatch (sort + batch per expert) replaces the naive nested loop (~6.7× speedup).
+    - **`Expert`** — single SwiGLU FFN (`down(silu(gate(x)) * up(x))`).
+  - **`RecurrentBlock`** — the looped core. At each iteration applies the transformer block, depth-wise LoRA, LTI injection, and (under ACT) accumulates halting weights. Under `bypass_act=True`, runs all `n_loops` iterations and returns the final hidden state.
+    - **`LTIInjection`** — linear time-invariant state update with guaranteed spectral radius < 1 (ZOH discretization; clamp `log_dt+log_A` to `[-13, 20]` keeps `A < 1.0` strictly in fp32).
+    - **`ACTHalting`** — per-position adaptive halting probability.
+    - **`LoRAAdapter`** — per-loop-index low-rank adaptation.
 
 ## Other Key Files
 
-- **`open_mythos/variants.py`** — pre-configured model scales from 1B to 1T parameters
-- **`open_mythos/tokenizer.py`** — wrapper around HuggingFace `AutoTokenizer` (default: `openai/gpt-oss-20b`)
-- **`open_mythos/moda.py`** — alternative Mixture-of-Depths Attention architecture with depth KV cache
+- **`open_mythos/variants.py`** — pre-configured model scales from 1B to 1T parameters.
+- **`open_mythos/tokenizer.py`** — wrapper around HuggingFace `AutoTokenizer` (default: `openai/gpt-oss-20b`).
+- **`open_mythos/moda.py`** — alternative Mixture-of-Depths Attention architecture.
+- **`evaluations/eval_checkpoint.py`** — standalone checkpoint eval (generation + depth sweep); submit via `deploy/bluevela/bsub_eval.sh`.
+- **`deploy/bluevela/`** — BlueVela LSF deployment scripts (setup, training, eval submission).
+- **`docs/logbook/`** — dated logbook entries; canonical source of truth for project state, decisions, and next steps. Read the latest entry first when picking up work.
 
 ## Key Design Patterns
 
-- **Attention type is runtime-switchable** via `MythosConfig.attn_type` ("gqa" or "mla"). Both share the same `TransformerBlock` interface; MLA reconstructs full K/V from compressed latents on demand.
-- **RoPE frequencies are precomputed** as complex phasors and stored as buffers. GQA and MLA use separate rope buffers (different head dims). Frequencies are lazily extended when sequence length exceeds the precomputed range.
+- **Attention type is runtime-switchable** via `MythosConfig.attn_type` (`"gqa"` or `"mla"`). Both share the same `TransformerBlock` interface; MLA reconstructs full K/V from compressed latents on demand.
+- **RoPE frequencies are precomputed** as complex phasors and stored as buffers. GQA and MLA use separate rope buffers (different head dims). `OpenMythos.forward` slices `freqs_cis[start_pos:start_pos + T]`; unit tests that bypass the top-level forward must slice explicitly.
 - **The recurrent block injects sinusoidal loop-index embeddings** to differentiate behavior across iterations, plus re-injects the original input `e` at every loop to prevent hidden state drift.
 - **KV cache** is accumulated across sequence positions (prefill + decode). During generation, `start_pos` tracks the current decode position.
-- **ACT remainder trick**: the final loop iteration gets weight `R = 1 - sum(previous weights)` to ensure per-position weights sum to exactly 1.
+- **FSDP collective-ordering invariant:** any call that contains an `all_reduce` / `all_gather` must execute on every rank in the same order. Rank-local early-exits (e.g. ACT's original `halted.all()` break, or skipping a MoE layer whose local counts are zero) cause NCCL-watchdog deadlocks. See `docs/logbook/2026-04-23-act-fsdp-deadlock.md` for the canonical case; `MoEFFN.update_router_bias` and `RecurrentBlock.forward` carry pinned `INVARIANT:` comments.
+- **FSDP MixedPrecision and buffers:** `training/1b_poc_fineweb.py` uses `MixedPrecision(param_dtype=bf16, reduce_dtype=bf16)` and deliberately omits `buffer_dtype`. Casting buffers to bf16 would corrupt int64 `expert_counts` (saturates above 256) and fp32 `router_bias` (update of `1e-3` falls below bf16 resolution).
+- **Checkpoints are cross-mode compatible** between `recurrent_mode="act"` and `"stochastic_depth"` — `ACTHalting` weights are present in both cases and simply receive no gradient under `bypass_act=True`.

@@ -185,20 +185,21 @@ d1c51b2 fix(eval): use temperature=0.01 instead of 0.0 for greedy decode
 
 ### Still Open
 
-3. **Add lm-eval-harness integration** — Standard benchmarks (HellaSwag, ARC,
-   MMLU) would allow comparison with published results for similarly-sized
-   models.
+> **Update 2026-04-29:** canonical roadmap has moved to
+> `docs/logbook/2026-04-28-option-b-and-upstream-pr.md`. Status reflected below.
 
-4. **Fix 14 pre-existing test failures** — RoPE dimension mismatch after
-   upstream flash-attn merge (13 tests) + LTI spectral radius boundary (1 test).
+3. **Add lm-eval-harness integration** — Still open. Best deferred until the
+   10B run (now job 67208) completes.
 
-5. **router_bias load balancing** (pzerfos/OpenMythos#3) — Most impactful
-   deferred code review item. Expert utilization imbalance grows with longer
-   training.
+4. ~~**Fix 14 pre-existing test failures**~~ — **Resolved 2026-04-29** in
+   commit `ac3091a`.
 
-6. **FSDP1 -> FSDP2 migration** (pzerfos/OpenMythos#6) — Lower memory,
-   torch.compile support. Worth doing before the next larger-scale run.
+5. ~~**router_bias load balancing**~~ (pzerfos/OpenMythos#3) — **Resolved
+   2026-04-29** via PR #8 (`c41469e`) + PR #9 (`0586f2f`). See
+   `docs/logbook/2026-04-29-router-bias-load-balancing.md`.
 
-7. **Study Gated DeltaNet** — Qwen3.6's hybrid attention is a generation ahead
-   for long-context efficiency. Worth investigating for future OpenMythos
-   iterations.
+6. **FSDP1 -> FSDP2 migration** (pzerfos/OpenMythos#6) — Still open; next
+   step is a feasibility benchmark, plan in
+   `docs/logbook/2026-04-29-fsdp2-feasibility-benchmark-plan.md`.
+
+7. **Study Gated DeltaNet** — Still open, research direction, low urgency.

@@ -110,6 +110,12 @@ further ~2.3x speedup (steps drop from ~2.3s to ~1.0s once halting kicks in).
 
 ## Next Steps
 
+> **Update 2026-04-29:** canonical roadmap lives in
+> `docs/logbook/2026-04-28-option-b-and-upstream-pr.md`. The near-term
+> follow-ups below (#5 tests, #6 router_bias) are now resolved; #8 ACT vs
+> depth was resolved by choosing Option B. Entries preserved as historical
+> record.
+
 ### Completed this session
 1. ~~**Benchmark MoE dispatch on GPU**~~ — Done: 6.7x confirmed (see above)
 2. ~~**ACT FSDP deadlock**~~ — Diagnosed, fixed, validated (see `2026-04-23-act-fsdp-deadlock.md`)
