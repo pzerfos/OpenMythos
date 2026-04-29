@@ -259,3 +259,29 @@ def test_openmythos_routes_pe_mode_coda():
     # atol=1e-6: the coda NoPE effect is small (1 layer, then norm+head compresses
     # it to ~6e-6 max diff), but must be non-zero — use tighter tolerance than prelude.
     assert not torch.allclose(out_all_rope, out_nope_coda, atol=1e-6)
+
+
+def test_state_dict_round_trip_across_pe_modes():
+    """The pe_mode flags are not parameters/buffers, so state_dict keys and
+    shapes must be identical across all three variants. Loading a baseline
+    checkpoint into a scoped-NoPE model (and vice versa) must succeed with
+    strict=True."""
+    cfg_baseline = _tiny_mythos_cfg()
+    cfg_scoped = _tiny_mythos_cfg()
+    cfg_scoped.pe_mode_recurrent = "nope"
+
+    torch.manual_seed(0)
+    m_baseline = OpenMythos(cfg_baseline)
+
+    torch.manual_seed(1)  # different init
+    m_scoped = OpenMythos(cfg_scoped)
+
+    # Load baseline state_dict into the scoped-NoPE model with strict=True
+    m_scoped.load_state_dict(m_baseline.state_dict(), strict=True)
+
+    # Keys match exactly
+    assert set(m_baseline.state_dict().keys()) == set(m_scoped.state_dict().keys())
+
+    # Shapes match exactly
+    for k, v in m_baseline.state_dict().items():
+        assert v.shape == m_scoped.state_dict()[k].shape, k
