@@ -112,7 +112,7 @@ All ACT-architecture uncertainty is resolved (Option B chosen and built). Remain
 3. **`router_bias` load balancing** (pzerfos/OpenMythos#3) — bias is initialized but never updated during training. Expert utilization imbalance may grow with longer training. Deferred.
 4. **FSDP1 → FSDP2 migration** (pzerfos/OpenMythos#6) — lower memory, `torch.compile` support. Worth doing before a larger-scale run.
 5. **Study Gated DeltaNet** — Qwen3.6's hybrid linear+full attention for long-context efficiency. Future architecture direction.
-6. **Decide whether to switch the 10B run mid-training to Option B** — the next preemption will do this automatically unless `recurrent_mode = "act"` is set on the BlueVela checkout. Open question: do we want to continue the ACT 10B run to completion, or switch to Option B now to get a depth-extrapolation-capable checkpoint?
+6. ~~**Decide whether to switch the 10B run mid-training to Option B**~~ — **Resolved 2026-04-29**: switched at step 121,000. See `docs/logbook/2026-04-29-act-to-stochastic-depth-switch.md`.
 
 ---
 
