@@ -48,7 +48,11 @@ from datasets import load_dataset
 
 from open_mythos import OpenMythos
 from open_mythos.main import TransformerBlock, RecurrentBlock
-from open_mythos.variants import mythos_1b
+from open_mythos.variants import (
+    mythos_1b,
+    mythos_1b_partial_nope,
+    mythos_1b_scoped_nope,
+)
 from open_mythos.tokenizer import MythosTokenizer
 
 # ---------------------------------------------------------------------------
@@ -59,7 +63,9 @@ _clearml_task = None
 _clearml_logger = None
 
 
-def init_clearml(cfg, training_hparams: dict, timeout: int = 30):
+def init_clearml(
+    cfg, training_hparams: dict, timeout: int = 30, task_name: str | None = None
+):
     """Initialize ClearML tracking on rank 0. No-op if unreachable or missing."""
     global _clearml_task, _clearml_logger
     import signal
@@ -71,7 +77,8 @@ def init_clearml(cfg, training_hparams: dict, timeout: int = 30):
         from clearml import Task
 
         project = os.environ.get("CLEARML_PROJECT", "granite-mythos")
-        task_name = os.environ.get("EXPERIMENT_NAME", "1b-poc-fineweb-10B")
+        if task_name is None:
+            task_name = os.environ.get("EXPERIMENT_NAME", "1b-poc-fineweb-10B")
 
         # Task.init can hang if the ClearML server is unreachable (e.g.,
         # compute nodes without internet). Use a SIGALRM timeout to fail fast.
@@ -376,6 +383,21 @@ def run_generation_test(cfg, ckpt_dir, encoding, device: str):
 
 
 def main():
+    # CLI override for the NoPE ablation variant. Default (= the local `variant`
+    # value below) is used unless --variant is passed. torchrun forwards args
+    # after the script path, so `torchrun ... 1b_poc_fineweb.py --variant scoped`
+    # routes through here.
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--variant",
+        choices=["baseline", "scoped", "partial"],
+        default=None,
+        help="NoPE ablation variant (default: the 'variant' local below)",
+    )
+    cli_args, _ = parser.parse_known_args()
+
     # ------------------------------------------------------------------
     # Distributed init
     # ------------------------------------------------------------------
@@ -423,6 +445,17 @@ def main():
     # disable. DeepSeek-V3 paper uses 1e-3.
     router_bias_update_rate = 1e-3
 
+    # NoPE ablation variant. Determines which config builder from
+    # open_mythos.variants is used to construct the model:
+    #   "baseline" -> mythos_1b()                  (full RoPE; production default)
+    #   "scoped"   -> mythos_1b_scoped_nope()      (NoPE in recurrent block only)
+    #   "partial"  -> mythos_1b_partial_nope()     (MLA qk_rope_head_dim=0)
+    # Overridable at submission time via --variant. See
+    # docs/superpowers/specs/2026-04-29-nope-for-recurrent-depth-design.md.
+    variant = "baseline"
+    if cli_args.variant is not None:
+        variant = cli_args.variant
+
     seq_len = 2048
     micro_batch = 1
     target_tokens_b = int(os.environ.get("TARGET_TOKENS", "10"))
@@ -440,6 +473,9 @@ def main():
         "OUTPUT_DIR", "/u/pzerfos/data/granite-mythos/output/experiments"
     )
     ckpt_dir = os.path.join(output_dir, "checkpoints")
+    if variant != "baseline":
+        # Keep ablation runs isolated from the production (baseline) checkpoints
+        ckpt_dir = os.path.join(output_dir, "checkpoints", "nope-ablation", variant)
     dataset_path = os.environ.get(
         "DATASET_PATH", "/proj/datasets/pzerfos/fineweb-edu-100B/sample/100BT"
     )
@@ -477,9 +513,28 @@ def main():
     # ------------------------------------------------------------------
     # Model
     # ------------------------------------------------------------------
-    cfg = mythos_1b()
+    if variant == "baseline":
+        cfg = mythos_1b()
+    elif variant == "scoped":
+        cfg = mythos_1b_scoped_nope()
+    elif variant == "partial":
+        cfg = mythos_1b_partial_nope()
+    else:
+        raise ValueError(
+            f"variant must be 'baseline', 'scoped', or 'partial'; got {variant!r}"
+        )
     cfg.vocab_size = vocab_size
     cfg.max_seq_len = seq_len
+
+    if master:
+        logger.info(f"variant = {variant}")
+        logger.info(
+            f"pe_mode_prelude={cfg.pe_mode_prelude} "
+            f"pe_mode_coda={cfg.pe_mode_coda} "
+            f"pe_mode_recurrent={cfg.pe_mode_recurrent} "
+            f"qk_rope_head_dim={cfg.qk_rope_head_dim} "
+            f"qk_nope_head_dim={cfg.qk_nope_head_dim}"
+        )
 
     bf16_ok = torch.cuda.is_available() and torch.cuda.is_bf16_supported()
     amp_dtype = torch.bfloat16 if bf16_ok else torch.float16
@@ -533,7 +588,10 @@ def main():
     # ClearML init (after model is built so we can log config)
     # ------------------------------------------------------------------
     if master:
-        init_clearml(cfg, training_hparams)
+        if variant == "baseline":
+            init_clearml(cfg, training_hparams)
+        else:
+            init_clearml(cfg, training_hparams, task_name=f"nope-ablation/{variant}")
 
     # ------------------------------------------------------------------
     # Optimizer

@@ -33,6 +33,26 @@ def mythos_1b() -> MythosConfig:
     )
 
 
+def mythos_1b_scoped_nope() -> MythosConfig:
+    """Scoped NoPE variant of mythos_1b(): RoPE in prelude+coda, NoPE inside
+    the recurrent block. See docs/superpowers/specs/2026-04-29-nope-for-recurrent-depth-design.md.
+    """
+    cfg = mythos_1b()
+    cfg.pe_mode_recurrent = "nope"
+    return cfg
+
+
+def mythos_1b_partial_nope() -> MythosConfig:
+    """Partial NoPE variant via MLA: qk_rope_head_dim=0, with the budget
+    reassigned to qk_nope_head_dim so total per-head dim is preserved.
+    See docs/superpowers/specs/2026-04-29-nope-for-recurrent-depth-design.md."""
+    cfg = mythos_1b()
+    # Reassign rope-head budget into nope-head (total head dim unchanged)
+    cfg.qk_nope_head_dim = cfg.qk_nope_head_dim + cfg.qk_rope_head_dim
+    cfg.qk_rope_head_dim = 0
+    return cfg
+
+
 def mythos_3b() -> MythosConfig:
     """3B parameter config. Compact inference model. dim=3072, 64 experts, 16 loop iters, 4k context."""
     return MythosConfig(

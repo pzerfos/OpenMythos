@@ -79,6 +79,14 @@ class MythosConfig:
     max_output_tokens: int = 4096
     # Dropout (set 0.0 to disable; 0.1 is standard for pretraining)
     dropout: float = 0.0
+    # Positional encoding mode per site. "rope" uses apply_rope as before;
+    # "nope" skips the rotation (and relies on the causal mask for implicit
+    # position — see Kazemnejad 2023, arxiv 2305.19466). These knobs allow
+    # the Scoped NoPE variant (nope in recurrent block only) without
+    # duplicating attention classes.
+    pe_mode_prelude: str = "rope"
+    pe_mode_coda: str = "rope"
+    pe_mode_recurrent: str = "rope"
 
 
 # ---------------------------------------------------------------------------
@@ -217,6 +225,7 @@ class GQAttention(nn.Module):
         mask: Optional[torch.Tensor] = None,
         kv_cache: Optional[dict] = None,
         cache_key: str = "default",
+        pe_mode: str = "rope",
     ) -> torch.Tensor:
         """
         Args:
@@ -235,8 +244,11 @@ class GQAttention(nn.Module):
         k = self.wk(x).view(B, T, self.n_kv_heads, self.head_dim)
         v = self.wv(x).view(B, T, self.n_kv_heads, self.head_dim)
 
-        q = apply_rope(q, freqs_cis)
-        k = apply_rope(k, freqs_cis)
+        if pe_mode == "rope":
+            q = apply_rope(q, freqs_cis)
+            k = apply_rope(k, freqs_cis)
+        elif pe_mode != "nope":
+            raise ValueError(f"pe_mode must be 'rope' or 'nope', got {pe_mode!r}")
 
         if kv_cache is not None:
             if cache_key in kv_cache:
@@ -358,6 +370,7 @@ class MLAttention(nn.Module):
         mask: Optional[torch.Tensor] = None,
         kv_cache: Optional[dict] = None,
         cache_key: str = "default",
+        pe_mode: str = "rope",
     ) -> torch.Tensor:
         """
         Args:
@@ -366,6 +379,7 @@ class MLAttention(nn.Module):
             mask      -- additive causal mask of shape (1, 1, T, S) or None
             kv_cache  -- dict mutated in-place; stores {"c_kv": ..., "k_rope": ...}
             cache_key -- unique key identifying this layer in the cache dict
+            pe_mode   -- "rope" (default) or "nope" (skip RoPE rotation)
 
         Returns:
             Output tensor of shape (B, T, dim)
@@ -377,7 +391,10 @@ class MLAttention(nn.Module):
         c_q = self.q_norm(self.q_down(x))
         q_nope = self.q_up_nope(c_q).view(B, T, self.n_heads, self.qk_nope_dim)
         q_rope = self.q_up_rope(c_q).view(B, T, self.n_heads, self.qk_rope_dim)
-        q_rope = apply_rope(q_rope, freqs_cis)
+        if pe_mode == "rope":
+            q_rope = apply_rope(q_rope, freqs_cis)
+        elif pe_mode != "nope":
+            raise ValueError(f"pe_mode must be 'rope' or 'nope', got {pe_mode!r}")
         q = torch.cat([q_nope, q_rope], dim=-1)  # (B, T, H, nope+rope)
 
         # KV compress
@@ -391,7 +408,9 @@ class MLAttention(nn.Module):
             .expand(B, T, self.n_heads, self.qk_rope_dim)
             .contiguous()
         )
-        k_rope = apply_rope(k_rope, freqs_cis)  # (B, T, H, rope_dim) ← cached
+        if pe_mode == "rope":
+            k_rope = apply_rope(k_rope, freqs_cis)  # (B, T, H, rope_dim) ← cached
+        # Under NoPE, k_rope is the unrotated expanded tensor; concat as-is below.
 
         if kv_cache is not None:
             if cache_key in kv_cache:
@@ -603,6 +622,7 @@ class MoEFFN(nn.Module):
         # collective, the others wait, NCCL watchdog fires after 600s.
         if ddp:
             import torch.distributed as dist
+
             dist.all_reduce(self.expert_counts, op=dist.ReduceOp.SUM)
 
         total = self.expert_counts.sum()
@@ -756,6 +776,7 @@ class TransformerBlock(nn.Module):
         mask: Optional[torch.Tensor] = None,
         kv_cache: Optional[dict] = None,
         cache_key: str = "default",
+        pe_mode: str = "rope",
     ) -> torch.Tensor:
         """
         Args:
@@ -764,12 +785,13 @@ class TransformerBlock(nn.Module):
             mask      -- additive causal mask or None
             kv_cache  -- cache dict mutated in-place by the attention layer
             cache_key -- key identifying this layer in the cache
+            pe_mode   -- "rope" (default) or "nope" (no positional encoding)
 
         Returns:
             Output tensor of shape (B, T, dim)
         """
         x = x + self.resid_drop(
-            self.attn(self.attn_norm(x), freqs_cis, mask, kv_cache, cache_key)
+            self.attn(self.attn_norm(x), freqs_cis, mask, kv_cache, cache_key, pe_mode)
         )
         x = x + self.resid_drop(self.ffn(self.ffn_norm(x)))
         return x
@@ -913,6 +935,7 @@ class RecurrentBlock(nn.Module):
         """
         super().__init__()
         self.cfg = cfg
+        self.pe_mode = cfg.pe_mode_recurrent
         self.block = TransformerBlock(cfg, use_moe=True)
         self.injection = LTIInjection(cfg.dim)
         self.act = ACTHalting(cfg.dim)
@@ -964,7 +987,9 @@ class RecurrentBlock(nn.Module):
             h_loop = loop_index_embedding(h, t, self.loop_dim)
             combined = self.norm(h_loop + e)
             cache_key = f"recurrent_loop_{t}"
-            trans_out = self.block(combined, freqs_cis, mask, kv_cache, cache_key)
+            trans_out = self.block(
+                combined, freqs_cis, mask, kv_cache, cache_key, self.pe_mode
+            )
             trans_out = trans_out + self.lora(trans_out, t)
             h = self.injection(h, e, trans_out)
 
@@ -1162,13 +1187,27 @@ class OpenMythos(nn.Module):
         mask = self._causal_mask(T, device, x.dtype) if T > 1 else None
 
         for i, layer in enumerate(self.prelude):
-            x = layer(x, freqs_cis, mask, kv_cache, cache_key=f"prelude_{i}")
+            x = layer(
+                x,
+                freqs_cis,
+                mask,
+                kv_cache,
+                cache_key=f"prelude_{i}",
+                pe_mode=self.cfg.pe_mode_prelude,
+            )
 
         e = x  # encoded input frozen for injection every loop
         x = self.recurrent(x, e, freqs_cis, mask, n_loops, kv_cache, bypass_act)
 
         for i, layer in enumerate(self.coda):
-            x = layer(x, freqs_cis, mask, kv_cache, cache_key=f"coda_{i}")
+            x = layer(
+                x,
+                freqs_cis,
+                mask,
+                kv_cache,
+                cache_key=f"coda_{i}",
+                pe_mode=self.cfg.pe_mode_coda,
+            )
 
         x = self.norm(x)
         return self.head(x.to(self.head.weight.dtype))
