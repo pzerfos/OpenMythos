@@ -23,7 +23,7 @@ def test_mythos_config_pe_mode_is_settable():
     assert cfg.pe_mode_coda == "rope"
 
 
-from open_mythos.main import GQAttention, MLAttention, precompute_rope_freqs
+from open_mythos.main import GQAttention, MLAttention, TransformerBlock, precompute_rope_freqs
 
 
 def _gqa_test_cfg() -> MythosConfig:
@@ -140,3 +140,20 @@ def test_mla_partial_nope_zero_rope_dim():
         out = attn(x, freqs_cis, pe_mode="rope")  # rope_dim=0 makes rope a no-op
     assert torch.isfinite(out).all()
     assert out.shape == (1, 6, cfg.dim)
+
+
+def test_transformer_block_plumbs_pe_mode():
+    """TransformerBlock.forward should forward pe_mode to its inner attention."""
+    torch.manual_seed(0)
+    cfg = _mla_test_cfg()
+    block = TransformerBlock(cfg, use_moe=False)
+    block.eval()
+    freqs_cis = precompute_rope_freqs(
+        cfg.qk_rope_head_dim, cfg.max_seq_len, 500000.0
+    )[:6]
+    x = torch.randn(1, 6, cfg.dim)
+    with torch.no_grad():
+        out_rope = block(x, freqs_cis, pe_mode="rope")
+        out_nope = block(x, freqs_cis, pe_mode="nope")
+    assert out_rope.shape == (1, 6, cfg.dim)
+    assert not torch.allclose(out_rope[:, 1:], out_nope[:, 1:], atol=1e-3)

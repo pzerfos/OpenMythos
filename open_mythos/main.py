@@ -775,6 +775,7 @@ class TransformerBlock(nn.Module):
         mask: Optional[torch.Tensor] = None,
         kv_cache: Optional[dict] = None,
         cache_key: str = "default",
+        pe_mode: str = "rope",
     ) -> torch.Tensor:
         """
         Args:
@@ -783,12 +784,15 @@ class TransformerBlock(nn.Module):
             mask      -- additive causal mask or None
             kv_cache  -- cache dict mutated in-place by the attention layer
             cache_key -- key identifying this layer in the cache
+            pe_mode   -- "rope" (default) or "nope" (no positional encoding)
 
         Returns:
             Output tensor of shape (B, T, dim)
         """
         x = x + self.resid_drop(
-            self.attn(self.attn_norm(x), freqs_cis, mask, kv_cache, cache_key)
+            self.attn(
+                self.attn_norm(x), freqs_cis, mask, kv_cache, cache_key, pe_mode
+            )
         )
         x = x + self.resid_drop(self.ffn(self.ffn_norm(x)))
         return x
