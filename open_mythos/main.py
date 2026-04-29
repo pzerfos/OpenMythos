@@ -225,6 +225,7 @@ class GQAttention(nn.Module):
         mask: Optional[torch.Tensor] = None,
         kv_cache: Optional[dict] = None,
         cache_key: str = "default",
+        pe_mode: str = "rope",
     ) -> torch.Tensor:
         """
         Args:
@@ -243,8 +244,11 @@ class GQAttention(nn.Module):
         k = self.wk(x).view(B, T, self.n_kv_heads, self.head_dim)
         v = self.wv(x).view(B, T, self.n_kv_heads, self.head_dim)
 
-        q = apply_rope(q, freqs_cis)
-        k = apply_rope(k, freqs_cis)
+        if pe_mode == "rope":
+            q = apply_rope(q, freqs_cis)
+            k = apply_rope(k, freqs_cis)
+        elif pe_mode != "nope":
+            raise ValueError(f"pe_mode must be 'rope' or 'nope', got {pe_mode!r}")
 
         if kv_cache is not None:
             if cache_key in kv_cache:
