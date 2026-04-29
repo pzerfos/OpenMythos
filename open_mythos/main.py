@@ -370,6 +370,7 @@ class MLAttention(nn.Module):
         mask: Optional[torch.Tensor] = None,
         kv_cache: Optional[dict] = None,
         cache_key: str = "default",
+        pe_mode: str = "rope",
     ) -> torch.Tensor:
         """
         Args:
@@ -378,6 +379,7 @@ class MLAttention(nn.Module):
             mask      -- additive causal mask of shape (1, 1, T, S) or None
             kv_cache  -- dict mutated in-place; stores {"c_kv": ..., "k_rope": ...}
             cache_key -- unique key identifying this layer in the cache dict
+            pe_mode   -- "rope" (default) or "nope" (skip RoPE rotation)
 
         Returns:
             Output tensor of shape (B, T, dim)
@@ -389,7 +391,10 @@ class MLAttention(nn.Module):
         c_q = self.q_norm(self.q_down(x))
         q_nope = self.q_up_nope(c_q).view(B, T, self.n_heads, self.qk_nope_dim)
         q_rope = self.q_up_rope(c_q).view(B, T, self.n_heads, self.qk_rope_dim)
-        q_rope = apply_rope(q_rope, freqs_cis)
+        if pe_mode == "rope":
+            q_rope = apply_rope(q_rope, freqs_cis)
+        elif pe_mode != "nope":
+            raise ValueError(f"pe_mode must be 'rope' or 'nope', got {pe_mode!r}")
         q = torch.cat([q_nope, q_rope], dim=-1)  # (B, T, H, nope+rope)
 
         # KV compress
@@ -403,7 +408,9 @@ class MLAttention(nn.Module):
             .expand(B, T, self.n_heads, self.qk_rope_dim)
             .contiguous()
         )
-        k_rope = apply_rope(k_rope, freqs_cis)  # (B, T, H, rope_dim) ← cached
+        if pe_mode == "rope":
+            k_rope = apply_rope(k_rope, freqs_cis)  # (B, T, H, rope_dim) ← cached
+        # Under NoPE, k_rope is the unrotated expanded tensor; concat as-is below.
 
         if kv_cache is not None:
             if cache_key in kv_cache:
