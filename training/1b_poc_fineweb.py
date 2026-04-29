@@ -417,6 +417,12 @@ def main():
     stochastic_depth_min = 1
     stochastic_depth_max = 32
 
+    # DeepSeek-V3 aux-loss-free MoE load balancing (Algorithm 1). Shifts
+    # router_bias after every optimizer step so underused experts get picked
+    # more often, without distorting the forward-pass gradient. Set to 0.0 to
+    # disable. DeepSeek-V3 paper uses 1e-3.
+    router_bias_update_rate = 0.0
+
     seq_len = 2048
     micro_batch = 1
     target_tokens_b = int(os.environ.get("TARGET_TOKENS", "10"))
@@ -638,6 +644,16 @@ def main():
         else:
             grad_norm = nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
+
+        # DeepSeek-V3 aux-loss-free MoE load balancing. No-op when rate == 0.
+        # Counts accumulated across all grad_accum micro-steps of this opt step;
+        # all_reduce inside sums across ranks so every rank updates identically.
+        router_stats = (
+            model.module.update_router_biases(router_bias_update_rate, ddp=ddp)
+            if ddp
+            else model.update_router_biases(router_bias_update_rate, ddp=False)
+        )
+
         step += 1
 
         if master and step % log_every == 0:
@@ -664,6 +680,17 @@ def main():
             log_clearml("throughput_mtok_s", tok_per_sec / 1e6, step)
             log_clearml("tokens_seen_B", tokens_seen / 1e9, step)
             log_clearml("n_loops", float(n_loops_display), step)
+            if router_bias_update_rate > 0.0:
+                log_clearml(
+                    "router_imbalance_max_over_mean",
+                    router_stats["max_over_mean"],
+                    step,
+                )
+                log_clearml(
+                    "router_imbalance_stddev_over_mean",
+                    router_stats["stddev_over_mean"],
+                    step,
+                )
 
             t0 = time.perf_counter()
 

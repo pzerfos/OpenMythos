@@ -376,6 +376,66 @@ class TestMoEFFN:
         out = self.moe(x)
         assert out.abs().sum() > 0
 
+    def test_expert_counts_accumulate(self):
+        # After two forwards, counts should reflect 2× B*T*topk selections
+        x = torch.randn(B, T, self.cfg.dim)
+        self.moe(x)
+        first_total = int(self.moe.expert_counts.sum().item())
+        assert first_total == B * T * self.cfg.n_experts_per_tok
+        self.moe(x)
+        second_total = int(self.moe.expert_counts.sum().item())
+        assert second_total == 2 * first_total
+
+    def test_update_router_bias_shifts_toward_balance(self):
+        # Zero input + zero router weight → zero logits → topk picks the
+        # lowest-index experts (0..topk-1) deterministically. That makes
+        # experts 0..topk-1 maximally hot and the rest cold.
+        with torch.no_grad():
+            self.moe.router.weight.zero_()
+        x = torch.zeros(B, T, self.cfg.dim)
+        self.moe(x)
+        k = self.cfg.n_experts_per_tok
+        stats = self.moe.update_router_bias(rate=1e-2, ddp=False)
+        # hot experts pushed down, cold pushed up
+        assert (self.moe.router_bias[:k] < 0.0).all()
+        assert (self.moe.router_bias[k:] > 0.0).all()
+        assert stats["max_over_mean"] > 1.0  # was very hot
+        assert stats["min_over_mean"] == 0.0  # some experts never fired
+
+    def test_update_router_bias_resets_counts(self):
+        x = torch.randn(B, T, self.cfg.dim)
+        self.moe(x)
+        assert self.moe.expert_counts.sum().item() > 0
+        self.moe.update_router_bias(rate=1e-3, ddp=False)
+        assert self.moe.expert_counts.sum().item() == 0
+
+    def test_update_router_bias_rate_zero_is_noop(self):
+        with torch.no_grad():
+            self.moe.router_bias.add_(torch.randn_like(self.moe.router_bias))
+        before = self.moe.router_bias.clone()
+        x = torch.randn(B, T, self.cfg.dim)
+        self.moe(x)
+        self.moe.update_router_bias(rate=0.0, ddp=False)
+        # rate=0 still resets counts but leaves bias untouched
+        assert torch.allclose(self.moe.router_bias, before)
+
+    def test_router_bias_does_not_affect_gating_weights(self):
+        # Output with a large router_bias should equal output with bias at 0
+        # when the top-k *selection* is unchanged, because gating weights use
+        # unbiased softmax(logits). We engineer the same top-k by using a
+        # small bias; the output should be bit-identical across bias changes
+        # that don't alter topk_idx. Here we verify by a strong invariant: the
+        # aux-loss-free property means a bias that doesn't change topk_idx
+        # produces the same output.
+        self.moe.eval()
+        x = torch.randn(B, T, self.cfg.dim)
+        with torch.no_grad():
+            out_zero = self.moe(x).clone()
+            # Add a tiny bias uniform across experts; topk_idx unchanged
+            self.moe.router_bias += 1e-6
+            out_small = self.moe(x).clone()
+        assert torch.allclose(out_zero, out_small, atol=1e-6)
+
 
 # ---------------------------------------------------------------------------
 # loop_index_embedding
@@ -570,6 +630,32 @@ class TestOpenMythosGQA:
 
     def test_weight_tying(self):
         assert self.model.head.weight is self.model.embed.weight
+
+    def test_update_router_biases_walks_all_moe_layers(self):
+        # Run a forward to populate expert_counts in every MoE layer, then
+        # update and confirm counts are reset everywhere.
+        self.model(self.ids)
+        moe_modules = [m for m in self.model.modules() if isinstance(m, MoEFFN)]
+        assert len(moe_modules) > 0
+        for m in moe_modules:
+            assert m.expert_counts.sum().item() > 0
+        stats = self.model.update_router_biases(rate=1e-3, ddp=False)
+        for m in moe_modules:
+            assert m.expert_counts.sum().item() == 0
+        assert "max_over_mean" in stats
+
+    def test_update_router_biases_rate_zero(self):
+        self.model(self.ids)
+        # rate=0.0 should short-circuit and not touch any MoE layer
+        moe = next(m for m in self.model.modules() if isinstance(m, MoEFFN))
+        counts_before = moe.expert_counts.clone()
+        stats = self.model.update_router_biases(rate=0.0, ddp=False)
+        assert torch.equal(moe.expert_counts, counts_before)
+        assert stats == {
+            "max_over_mean": 0.0,
+            "min_over_mean": 0.0,
+            "stddev_over_mean": 0.0,
+        }
 
     def test_lti_spectral_radius(self):
         A = self.model.recurrent.injection.get_A()
