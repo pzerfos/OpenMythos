@@ -487,10 +487,14 @@ def main():
     model = OpenMythos(cfg)
 
     if ddp:
+        # buffer_dtype=None (default) keeps buffers in their init dtype. Casting
+        # to bf16 corrupts the MoE load-balance state: expert_counts (int64)
+        # can't represent integers above 256 in bf16, and router_bias (fp32)
+        # updates of 1e-3 fall below bf16's ~1/128 relative resolution, causing
+        # rank divergence after an all-reduce(SUM) saturates.
         mp_policy = MixedPrecision(
             param_dtype=amp_dtype,
             reduce_dtype=amp_dtype,
-            buffer_dtype=amp_dtype,
         )
         wrap_policy = ModuleWrapPolicy({TransformerBlock, RecurrentBlock})
         model = FSDP(
@@ -689,6 +693,11 @@ def main():
                 log_clearml(
                     "router_imbalance_stddev_over_mean",
                     router_stats["stddev_over_mean"],
+                    step,
+                )
+                log_clearml(
+                    "router_imbalance_ratio",
+                    router_stats["imbalance_ratio"],
                     step,
                 )
 

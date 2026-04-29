@@ -387,16 +387,22 @@ class TestMoEFFN:
         assert second_total == 2 * first_total
 
     def test_update_router_bias_shifts_toward_balance(self):
-        # Zero input + zero router weight → zero logits → topk picks the
-        # lowest-index experts (0..topk-1) deterministically. That makes
-        # experts 0..topk-1 maximally hot and the rest cold.
-        with torch.no_grad():
-            self.moe.router.weight.zero_()
-        x = torch.zeros(B, T, self.cfg.dim)
-        self.moe(x)
+        # Explicitly engineer imbalance by setting router weights so that
+        # logit magnitudes follow a known order, independent of topk
+        # tie-breaking (which differs between CPU and CUDA).
         k = self.cfg.n_experts_per_tok
+        n = self.cfg.n_experts
+        with torch.no_grad():
+            # Expert i gets weight row filled with (n - i); for all-ones input,
+            # logit[i] = (n - i) * dim, strictly monotonically decreasing.
+            # top-k is unambiguously {0, 1, ..., k-1}.
+            self.moe.router.weight.zero_()
+            for i in range(n):
+                self.moe.router.weight[i] = float(n - i)
+        x = torch.ones(B, T, self.cfg.dim)
+        self.moe(x)
         stats = self.moe.update_router_bias(rate=1e-2, ddp=False)
-        # hot experts pushed down, cold pushed up
+        # hot experts pushed down, cold pushed up — no ties to worry about
         assert (self.moe.router_bias[:k] < 0.0).all()
         assert (self.moe.router_bias[k:] > 0.0).all()
         assert stats["max_over_mean"] > 1.0  # was very hot
@@ -420,21 +426,31 @@ class TestMoEFFN:
         assert torch.allclose(self.moe.router_bias, before)
 
     def test_router_bias_does_not_affect_gating_weights(self):
-        # Output with a large router_bias should equal output with bias at 0
-        # when the top-k *selection* is unchanged, because gating weights use
-        # unbiased softmax(logits). We engineer the same top-k by using a
-        # small bias; the output should be bit-identical across bias changes
-        # that don't alter topk_idx. Here we verify by a strong invariant: the
-        # aux-loss-free property means a bias that doesn't change topk_idx
-        # produces the same output.
+        # The aux-loss-free property: gating weights use softmax(logits), not
+        # softmax(logits + router_bias). To verify, engineer a non-uniform bias
+        # that's large on non-selected experts but still doesn't flip top-k.
+        # If the implementation mistakenly used biased softmax for gating, the
+        # output would differ; correct implementation gives identical output.
         self.moe.eval()
-        x = torch.randn(B, T, self.cfg.dim)
+        n = self.cfg.n_experts
+        k = self.cfg.n_experts_per_tok
+        with torch.no_grad():
+            # Large, unambiguous logit ordering: expert 0 beats 1 beats 2 ...
+            self.moe.router.weight.zero_()
+            for i in range(n):
+                self.moe.router.weight[i] = 100.0 * (n - i)
+        x = torch.ones(B, T, self.cfg.dim)
         with torch.no_grad():
             out_zero = self.moe(x).clone()
-            # Add a tiny bias uniform across experts; topk_idx unchanged
-            self.moe.router_bias += 1e-6
-            out_small = self.moe(x).clone()
-        assert torch.allclose(out_zero, out_small, atol=1e-6)
+            # Non-uniform bias: positive on cold experts, negative on next-hot.
+            # Magnitudes small enough that the top-k ordering (experts 0..k-1)
+            # is preserved — the gap between logit[k-1] and logit[k] is
+            # (n - k + 1 - (n - k)) * 100 * dim = 100 * dim, and our bias is ±10.
+            self.moe.router_bias.zero_()
+            self.moe.router_bias[k:] = 10.0  # boost cold experts (still lose)
+            self.moe.router_bias[k - 1] = -10.0  # dent a hot one (still wins)
+            out_biased = self.moe(x).clone()
+        assert torch.allclose(out_zero, out_biased, atol=1e-5)
 
 
 # ---------------------------------------------------------------------------
@@ -653,8 +669,31 @@ class TestOpenMythosGQA:
         assert torch.equal(moe.expert_counts, counts_before)
         assert stats == {
             "max_over_mean": 0.0,
-            "min_over_mean": 0.0,
             "stddev_over_mean": 0.0,
+            "imbalance_ratio": 0.0,
+        }
+
+    def test_update_router_biases_imbalance_ratio(self):
+        # imbalance_ratio conflates "hot" and "cold" signals: a dead expert
+        # (count=0 → min_over_mean=0) drives imbalance_ratio up the same way
+        # a very hot expert does.
+        self.model(self.ids)
+        stats = self.model.update_router_biases(rate=1e-3, ddp=False)
+        # At least one layer has some skew since expert utilization is never
+        # perfectly uniform on random input, so ratio should be > 1.
+        assert stats["imbalance_ratio"] >= stats["max_over_mean"]
+        assert stats["imbalance_ratio"] > 0.0
+
+    def test_update_router_biases_skips_layers_that_didnt_fire(self):
+        # Call update without running a forward first: every MoE layer has
+        # zero counts → target==0 → per-layer stats all zeros. The aggregator
+        # must skip them; otherwise cold_factor = 1/eps ≈ 1e6 would pin
+        # imbalance_ratio to a spurious spike.
+        stats = self.model.update_router_biases(rate=1e-3, ddp=False)
+        assert stats == {
+            "max_over_mean": 0.0,
+            "stddev_over_mean": 0.0,
+            "imbalance_ratio": 0.0,
         }
 
     def test_lti_spectral_radius(self):
