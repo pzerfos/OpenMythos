@@ -63,7 +63,9 @@ _clearml_task = None
 _clearml_logger = None
 
 
-def init_clearml(cfg, training_hparams: dict, timeout: int = 30, task_name: str | None = None):
+def init_clearml(
+    cfg, training_hparams: dict, timeout: int = 30, task_name: str | None = None
+):
     """Initialize ClearML tracking on rank 0. No-op if unreachable or missing."""
     global _clearml_task, _clearml_logger
     import signal
@@ -473,9 +475,7 @@ def main():
     ckpt_dir = os.path.join(output_dir, "checkpoints")
     if variant != "baseline":
         # Keep ablation runs isolated from the production (baseline) checkpoints
-        ckpt_dir = os.path.join(
-            output_dir, "checkpoints", "nope-ablation", variant
-        )
+        ckpt_dir = os.path.join(output_dir, "checkpoints", "nope-ablation", variant)
     dataset_path = os.environ.get(
         "DATASET_PATH", "/proj/datasets/pzerfos/fineweb-edu-100B/sample/100BT"
     )
@@ -591,9 +591,7 @@ def main():
         if variant == "baseline":
             init_clearml(cfg, training_hparams)
         else:
-            init_clearml(
-                cfg, training_hparams, task_name=f"nope-ablation/{variant}"
-            )
+            init_clearml(cfg, training_hparams, task_name=f"nope-ablation/{variant}")
 
     # ------------------------------------------------------------------
     # Optimizer

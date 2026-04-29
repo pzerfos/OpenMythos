@@ -6,7 +6,20 @@ See docs/superpowers/specs/2026-04-29-nope-for-recurrent-depth-design.md.
 
 import torch
 
-from open_mythos.main import MythosConfig
+from open_mythos.main import (
+    GQAttention,
+    MLAttention,
+    MythosConfig,
+    OpenMythos,
+    RecurrentBlock,
+    TransformerBlock,
+    precompute_rope_freqs,
+)
+from open_mythos.variants import (
+    mythos_1b,
+    mythos_1b_partial_nope,
+    mythos_1b_scoped_nope,
+)
 
 
 def test_mythos_config_pe_mode_defaults_to_rope():
@@ -21,9 +34,6 @@ def test_mythos_config_pe_mode_is_settable():
     assert cfg.pe_mode_recurrent == "nope"
     assert cfg.pe_mode_prelude == "rope"
     assert cfg.pe_mode_coda == "rope"
-
-
-from open_mythos.main import GQAttention, MLAttention, TransformerBlock, precompute_rope_freqs
 
 
 def _gqa_test_cfg() -> MythosConfig:
@@ -148,18 +158,15 @@ def test_transformer_block_plumbs_pe_mode():
     cfg = _mla_test_cfg()
     block = TransformerBlock(cfg, use_moe=False)
     block.eval()
-    freqs_cis = precompute_rope_freqs(
-        cfg.qk_rope_head_dim, cfg.max_seq_len, 500000.0
-    )[:6]
+    freqs_cis = precompute_rope_freqs(cfg.qk_rope_head_dim, cfg.max_seq_len, 500000.0)[
+        :6
+    ]
     x = torch.randn(1, 6, cfg.dim)
     with torch.no_grad():
         out_rope = block(x, freqs_cis, pe_mode="rope")
         out_nope = block(x, freqs_cis, pe_mode="nope")
     assert out_rope.shape == (1, 6, cfg.dim)
     assert not torch.allclose(out_rope[:, 1:], out_nope[:, 1:], atol=1e-3)
-
-
-from open_mythos.main import OpenMythos, RecurrentBlock
 
 
 def test_recurrent_block_pe_mode_stored_and_used():
@@ -177,9 +184,9 @@ def test_recurrent_block_pe_mode_stored_and_used():
     torch.manual_seed(0)
     rec = RecurrentBlock(cfg)
     rec.eval()
-    freqs_cis = precompute_rope_freqs(
-        cfg.qk_rope_head_dim, cfg.max_seq_len, 500000.0
-    )[:6]
+    freqs_cis = precompute_rope_freqs(cfg.qk_rope_head_dim, cfg.max_seq_len, 500000.0)[
+        :6
+    ]
     h = torch.randn(1, 6, cfg.dim)
     e = torch.randn(1, 6, cfg.dim)
     with torch.no_grad():
@@ -311,29 +318,31 @@ def test_kv_cache_prefill_decode_equals_one_shot_under_nope():
     cache_incr: dict = {}
     with torch.no_grad():
         _ = model(
-            input_ids[:, :4], n_loops=2, kv_cache=cache_incr, start_pos=0,
+            input_ids[:, :4],
+            n_loops=2,
+            kv_cache=cache_incr,
+            start_pos=0,
             bypass_act=True,
         )
         # Decode token at position 4
         _ = model(
-            input_ids[:, 4:5], n_loops=2, kv_cache=cache_incr, start_pos=4,
+            input_ids[:, 4:5],
+            n_loops=2,
+            kv_cache=cache_incr,
+            start_pos=4,
             bypass_act=True,
         )
         # Decode token at position 5
         out_incr_last = model(
-            input_ids[:, 5:6], n_loops=2, kv_cache=cache_incr, start_pos=5,
+            input_ids[:, 5:6],
+            n_loops=2,
+            kv_cache=cache_incr,
+            start_pos=5,
             bypass_act=True,
         )
 
     # Compare the logits of the last decode step to the one-shot logits at that pos
     assert torch.allclose(out_incr_last[:, 0], out_oneshot[:, 5], atol=1e-4)
-
-
-from open_mythos.variants import (
-    mythos_1b,
-    mythos_1b_scoped_nope,
-    mythos_1b_partial_nope,
-)
 
 
 def test_mythos_1b_scoped_nope_sets_only_recurrent_to_nope():

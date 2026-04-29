@@ -35,7 +35,8 @@ def mythos_1b() -> MythosConfig:
 
 def mythos_1b_scoped_nope() -> MythosConfig:
     """Scoped NoPE variant of mythos_1b(): RoPE in prelude+coda, NoPE inside
-    the recurrent block. See docs/superpowers/specs/2026-04-29-nope-for-recurrent-depth-design.md."""
+    the recurrent block. See docs/superpowers/specs/2026-04-29-nope-for-recurrent-depth-design.md.
+    """
     cfg = mythos_1b()
     cfg.pe_mode_recurrent = "nope"
     return cfg

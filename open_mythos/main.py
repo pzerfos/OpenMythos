@@ -622,6 +622,7 @@ class MoEFFN(nn.Module):
         # collective, the others wait, NCCL watchdog fires after 600s.
         if ddp:
             import torch.distributed as dist
+
             dist.all_reduce(self.expert_counts, op=dist.ReduceOp.SUM)
 
         total = self.expert_counts.sum()
@@ -790,9 +791,7 @@ class TransformerBlock(nn.Module):
             Output tensor of shape (B, T, dim)
         """
         x = x + self.resid_drop(
-            self.attn(
-                self.attn_norm(x), freqs_cis, mask, kv_cache, cache_key, pe_mode
-            )
+            self.attn(self.attn_norm(x), freqs_cis, mask, kv_cache, cache_key, pe_mode)
         )
         x = x + self.resid_drop(self.ffn(self.ffn_norm(x)))
         return x
@@ -1189,7 +1188,10 @@ class OpenMythos(nn.Module):
 
         for i, layer in enumerate(self.prelude):
             x = layer(
-                x, freqs_cis, mask, kv_cache,
+                x,
+                freqs_cis,
+                mask,
+                kv_cache,
                 cache_key=f"prelude_{i}",
                 pe_mode=self.cfg.pe_mode_prelude,
             )
@@ -1199,7 +1201,10 @@ class OpenMythos(nn.Module):
 
         for i, layer in enumerate(self.coda):
             x = layer(
-                x, freqs_cis, mask, kv_cache,
+                x,
+                freqs_cis,
+                mask,
+                kv_cache,
                 cache_key=f"coda_{i}",
                 pe_mode=self.cfg.pe_mode_coda,
             )

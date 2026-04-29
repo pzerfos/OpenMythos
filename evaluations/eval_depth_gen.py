@@ -23,7 +23,6 @@ from open_mythos.variants import (
     mythos_1b_scoped_nope,
 )
 
-
 VARIANT_TO_CFG = {
     "baseline": mythos_1b,
     "scoped": mythos_1b_scoped_nope,
@@ -34,7 +33,9 @@ VARIANT_TO_CFG = {
 def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--checkpoint", required=True)
-    p.add_argument("--variant", required=True, choices=["baseline", "scoped", "partial"])
+    p.add_argument(
+        "--variant", required=True, choices=["baseline", "scoped", "partial"]
+    )
     p.add_argument("--n-sequences", type=int, default=100)
     p.add_argument("--seq-len", type=int, default=2048)
     p.add_argument("--n-loops-sweep", type=int, nargs="+", default=[16, 32, 48, 64, 96])

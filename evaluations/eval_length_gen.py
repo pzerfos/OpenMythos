@@ -23,7 +23,6 @@ from open_mythos.variants import (
     mythos_1b_scoped_nope,
 )
 
-
 VARIANT_TO_CFG = {
     "baseline": mythos_1b,
     "scoped": mythos_1b_scoped_nope,
@@ -57,7 +56,9 @@ def _regenerate_freqs(model: OpenMythos, max_len: int, device: torch.device) -> 
     """Regenerate the precomputed RoPE frequencies for a target sequence length."""
     cfg = model.cfg
     head_dim = cfg.dim // cfg.n_heads
-    model.freqs_cis = precompute_rope_freqs(head_dim, max_len, cfg.rope_theta).to(device)
+    model.freqs_cis = precompute_rope_freqs(head_dim, max_len, cfg.rope_theta).to(
+        device
+    )
     model.freqs_cis_mla = precompute_rope_freqs(
         cfg.qk_rope_head_dim, max_len, cfg.rope_theta
     ).to(device)
@@ -106,7 +107,9 @@ def main():
             tokens = tokenizer.encode(text)[:seq_len]
             if len(tokens) < 64:
                 continue
-            input_ids = torch.tensor(tokens, dtype=torch.int64, device=device).unsqueeze(0)
+            input_ids = torch.tensor(
+                tokens, dtype=torch.int64, device=device
+            ).unsqueeze(0)
             nll = evaluate_at_length(model, input_ids, args.n_loops)
             nlls.append(nll)
         mean_nll = sum(nlls) / len(nlls)
