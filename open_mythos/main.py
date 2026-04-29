@@ -1208,9 +1208,24 @@ class OpenMythos(nn.Module):
         worst_imbalance = 0.0
         saw_layer = False
         eps = 1e-6
+        # INVARIANT: every rank must call update_router_bias() on the same
+        # set of MoE modules in the same order. That method contains an
+        # all_reduce collective; skipping it on some ranks but not others
+        # re-introduces the ACT deadlock class (see
+        # docs/logbook/2026-04-23-act-fsdp-deadlock.md). It is safe to skip
+        # aggregation *after* the call based on its return value — stats are
+        # post-all-reduce so every rank sees the same decision.
         for module in self.modules():
             if isinstance(module, MoEFFN):
                 stats = module.update_router_bias(rate, ddp=ddp)
+                # A layer that didn't fire returns all-zero stats; aggregating
+                # would make cold_factor = 1/eps spuriously dominate. Skip.
+                if (
+                    stats["max_over_mean"] == 0.0
+                    and stats["min_over_mean"] == 0.0
+                    and stats["stddev_over_mean"] == 0.0
+                ):
+                    continue
                 worst_max = max(worst_max, stats["max_over_mean"])
                 worst_std = max(worst_std, stats["stddev_over_mean"])
                 # Symmetric imbalance: hot experts pull max_over_mean above 1,

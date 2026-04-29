@@ -684,6 +684,18 @@ class TestOpenMythosGQA:
         assert stats["imbalance_ratio"] >= stats["max_over_mean"]
         assert stats["imbalance_ratio"] > 0.0
 
+    def test_update_router_biases_skips_layers_that_didnt_fire(self):
+        # Call update without running a forward first: every MoE layer has
+        # zero counts → target==0 → per-layer stats all zeros. The aggregator
+        # must skip them; otherwise cold_factor = 1/eps ≈ 1e6 would pin
+        # imbalance_ratio to a spurious spike.
+        stats = self.model.update_router_biases(rate=1e-3, ddp=False)
+        assert stats == {
+            "max_over_mean": 0.0,
+            "stddev_over_mean": 0.0,
+            "imbalance_ratio": 0.0,
+        }
+
     def test_lti_spectral_radius(self):
         A = self.model.recurrent.injection.get_A()
         assert A.max().item() < 1.0
