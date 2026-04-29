@@ -134,7 +134,7 @@ git commit -m "feat(model): add pe_mode_{prelude,coda,recurrent} to MythosConfig
 Append to `tests/test_nope.py`:
 
 ```python
-from open_mythos.main import GQAttention, MLAttention, precompute_freqs_cis
+from open_mythos.main import GQAttention, MLAttention, precompute_rope_freqs
 
 
 def _gqa_test_cfg() -> MythosConfig:
@@ -157,7 +157,7 @@ def test_gqa_nope_matches_rope_at_position_0():
     attn = GQAttention(cfg)
     attn.eval()
     head_dim = cfg.dim // cfg.n_heads
-    freqs_cis_full = precompute_freqs_cis(head_dim, cfg.max_seq_len, 500000.0)
+    freqs_cis_full = precompute_rope_freqs(head_dim, cfg.max_seq_len, 500000.0)
     freqs_cis = freqs_cis_full[:1]  # position 0 only
     x = torch.randn(1, 1, cfg.dim)
     with torch.no_grad():
@@ -174,7 +174,7 @@ def test_gqa_nope_differs_from_rope_at_later_positions():
     attn = GQAttention(cfg)
     attn.eval()
     head_dim = cfg.dim // cfg.n_heads
-    freqs_cis_full = precompute_freqs_cis(head_dim, cfg.max_seq_len, 500000.0)
+    freqs_cis_full = precompute_rope_freqs(head_dim, cfg.max_seq_len, 500000.0)
     T = 6
     freqs_cis = freqs_cis_full[:T]
     x = torch.randn(1, T, cfg.dim)
@@ -249,9 +249,6 @@ git commit -m "feat(model): plumb pe_mode through GQAttention.forward"
 Append to `tests/test_nope.py`:
 
 ```python
-from open_mythos.main import precompute_freqs_cis_mla
-
-
 def _mla_test_cfg() -> MythosConfig:
     return MythosConfig(
         vocab_size=256,
@@ -274,7 +271,7 @@ def test_mla_nope_matches_rope_at_position_0():
     cfg = _mla_test_cfg()
     attn = MLAttention(cfg)
     attn.eval()
-    freqs_cis_full = precompute_freqs_cis_mla(
+    freqs_cis_full = precompute_rope_freqs(
         cfg.qk_rope_head_dim, cfg.max_seq_len, 500000.0
     )
     freqs_cis = freqs_cis_full[:1]
@@ -290,7 +287,7 @@ def test_mla_nope_differs_from_rope_at_later_positions():
     cfg = _mla_test_cfg()
     attn = MLAttention(cfg)
     attn.eval()
-    freqs_cis_full = precompute_freqs_cis_mla(
+    freqs_cis_full = precompute_rope_freqs(
         cfg.qk_rope_head_dim, cfg.max_seq_len, 500000.0
     )
     T = 6
@@ -404,7 +401,7 @@ def test_transformer_block_plumbs_pe_mode():
     cfg = _mla_test_cfg()
     block = TransformerBlock(cfg, use_moe=False)
     block.eval()
-    freqs_cis = precompute_freqs_cis_mla(
+    freqs_cis = precompute_rope_freqs(
         cfg.qk_rope_head_dim, cfg.max_seq_len, 500000.0
     )[:6]
     x = torch.randn(1, 6, cfg.dim)
@@ -493,7 +490,7 @@ def test_recurrent_block_pe_mode_stored_and_used():
     torch.manual_seed(0)
     rec = RecurrentBlock(cfg)
     rec.eval()
-    freqs_cis = precompute_freqs_cis_mla(
+    freqs_cis = precompute_rope_freqs(
         cfg.qk_rope_head_dim, cfg.max_seq_len, 500000.0
     )[:6]
     h = torch.randn(1, 6, cfg.dim)
@@ -1177,7 +1174,7 @@ import torch
 import torch.nn.functional as F
 from loguru import logger
 
-from open_mythos.main import OpenMythos, precompute_freqs_cis, precompute_freqs_cis_mla
+from open_mythos.main import OpenMythos, precompute_rope_freqs
 from open_mythos.tokenizer import MythosTokenizer
 from open_mythos.variants import (
     mythos_1b,
@@ -1219,8 +1216,8 @@ def _regenerate_freqs(model: OpenMythos, max_len: int, device: torch.device) -> 
     """Regenerate the precomputed RoPE frequencies for a target sequence length."""
     cfg = model.cfg
     head_dim = cfg.dim // cfg.n_heads
-    model.freqs_cis = precompute_freqs_cis(head_dim, max_len, cfg.rope_theta).to(device)
-    model.freqs_cis_mla = precompute_freqs_cis_mla(
+    model.freqs_cis = precompute_rope_freqs(head_dim, max_len, cfg.rope_theta).to(device)
+    model.freqs_cis_mla = precompute_rope_freqs(
         cfg.qk_rope_head_dim, max_len, cfg.rope_theta
     ).to(device)
 
