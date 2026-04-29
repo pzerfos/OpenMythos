@@ -2,9 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **POST-EXECUTION AMENDMENT (2026-04-29):** Tasks 11 and 12 were amended during execution. The original plan used a `NOPE_VARIANT` environment variable to select the config at submission time; the implementation landed a local `variant` string (default `"baseline"`) in `main()` plus a `--variant` CLI flag override. Rationale: follow CLAUDE.md's "plain locals at top of main()" convention and avoid env-var pollution. The code on branch `feat/nope-ablation` reflects the amendment; the Task 11/12 code blocks below preserve the original env-var wording for historical context only — trust the merged code, not the snippets here.
+
 **Goal:** Implement the 3-variant NoPE ablation (baseline RoPE / Scoped NoPE / Partial NoPE via MLA) described in `docs/superpowers/specs/2026-04-29-nope-for-recurrent-depth-design.md`. Produce runnable training + eval artifacts on a dedicated branch so the three 1B-scale training jobs can be launched on or after 2026-05-01 when BlueVela load permits.
 
-**Architecture:** Add a per-site positional-encoding mode (`pe_mode: Literal["rope","nope"]`) to `MythosConfig` and plumb it through `MLAttention` / `GQAttention` / `TransformerBlock` / `RecurrentBlock` / `OpenMythos.__init__`. Partial NoPE is config-only (`qk_rope_head_dim=0`). Submission-side: a single `NOPE_VARIANT` env knob in `training/1b_poc_fineweb.py` picks the config builder, ClearML task name, and checkpoint dir; a bsub wrapper submits all three variants as independent 4-GPU jobs.
+**Architecture:** Add a per-site positional-encoding mode (`pe_mode: Literal["rope","nope"]`) to `MythosConfig` and plumb it through `MLAttention` / `GQAttention` / `TransformerBlock` / `RecurrentBlock` / `OpenMythos.__init__`. Partial NoPE is config-only (`qk_rope_head_dim=0`). Submission-side (as-built): `training/1b_poc_fineweb.py` has a `variant` local with a `--variant` CLI override that picks the config builder, ClearML task name, and checkpoint dir; a bsub wrapper submits all three variants as independent 4-GPU jobs, passing the variant as a positional arg to the inner runner.
 
 **Tech Stack:** Python 3.10, PyTorch 2.11, FSDP1 (existing), FineWeb-Edu dataset, ClearML, BlueVela LSF, `pytest` for unit tests.
 
@@ -15,7 +17,7 @@
 **Files to modify:**
 - `open_mythos/main.py` — `MythosConfig` fields; `pe_mode` plumbing through `GQAttention`, `MLAttention`, `TransformerBlock`, `RecurrentBlock`, `OpenMythos`.
 - `open_mythos/variants.py` — add `mythos_1b_scoped_nope()`, `mythos_1b_partial_nope()`.
-- `training/1b_poc_fineweb.py` — read `NOPE_VARIANT` env; variant-aware ClearML task name + checkpoint subdir.
+- `training/1b_poc_fineweb.py` — local `variant` default + `--variant` CLI override (see amendment at top); variant-aware ClearML task name + checkpoint subdir.
 - `docs/logbook/2026-04-28-option-b-and-upstream-pr.md` — add NoPE ablation as an open item; soften FSDP2 item language (evaluation completed, decision pending; not "queued"/"decided").
 
 **Files to create:**
@@ -895,6 +897,8 @@ git commit -m "feat(variants): add mythos_1b_scoped_nope and mythos_1b_partial_n
 
 ## Task 11: `NOPE_VARIANT` env knob in training script
 
+> **AMENDED DURING EXECUTION:** implemented as a local `variant` + `--variant` CLI flag, NOT as an env var. See the post-execution amendment at the top of this plan. The detailed steps below describe the original env-knob design; the actual as-built code uses argparse. Ground truth: commit `36328e1` on `feat/nope-ablation`.
+
 **Files:**
 - Modify: `training/1b_poc_fineweb.py` (around line 480 where `cfg = mythos_1b()` is; and the ClearML init section; and the checkpoint dir line)
 
@@ -992,6 +996,8 @@ git commit -m "feat(training): NOPE_VARIANT env knob selects the ablation config
 ---
 
 ## Task 12: bsub submission wrapper for 3 variants
+
+> **AMENDED DURING EXECUTION:** the runner receives the variant as a positional arg (`bash run_nope_ablation.sh baseline`) and forwards it as `--variant <name>` to `torchrun`. The `NOPE_VARIANT` environment variable is NOT used. See the post-execution amendment at the top of this plan. Ground truth: commit `5346b77` on `feat/nope-ablation`.
 
 **Files:**
 - Create: `deploy/bluevela/run_nope_ablation.sh`

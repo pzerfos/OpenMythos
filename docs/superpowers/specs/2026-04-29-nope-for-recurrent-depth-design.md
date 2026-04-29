@@ -122,7 +122,7 @@ All tests CPU-only, small dims, following existing `tests/` conventions.
 
 ### Submission
 
-- `training/1b_poc_fineweb.py` accepts a `NOPE_VARIANT={baseline,scoped,partial}` env knob. The variant picks the config builder from `variants.py` and overrides the ClearML task name + checkpoint dir.
+- `training/1b_poc_fineweb.py` carries a `variant` local (default `"baseline"`) near the other run-knob locals (`recurrent_mode`, `router_bias_update_rate`, etc.) and accepts a `--variant {baseline,scoped,partial}` CLI flag that overrides the local. The variant picks the config builder from `variants.py` and overrides the ClearML task name + checkpoint dir. No new environment variables are introduced.
 - `deploy/bluevela/bsub_nope_ablation.sh` submits all three variants as separate bsub jobs. Each 4 GPUs, one node, preemptable.
 
 ### Launch timing
@@ -184,14 +184,14 @@ Prep-now deliverables (before launch):
 - [ ] `open_mythos/main.py` — `pe_mode` plumbing through `MLAttention` / `GQAttention` / `TransformerBlock` / `RecurrentBlock`.
 - [ ] `open_mythos/variants.py` — `mythos_1b_scoped_nope()`, `mythos_1b_partial_nope()`.
 - [ ] `tests/test_nope.py` — equivalence-at-position-0, state_dict round-trip, KV-cache correctness, partial-NoPE MLA smoke test.
-- [ ] `training/1b_poc_fineweb.py` — `NOPE_VARIANT` env knob; variant-aware ClearML task name and checkpoint dir.
+- [ ] `training/1b_poc_fineweb.py` — local `variant` default + `--variant` CLI flag override; variant-aware ClearML task name and checkpoint dir.
 - [ ] `deploy/bluevela/bsub_nope_ablation.sh` — submits all three variants as separate bsub jobs.
 - [ ] `evaluations/eval_length_gen.py` — length-generalization sweep.
 - [ ] `evaluations/eval_depth_gen.py` — depth-generalization sweep.
 - [ ] `docs/logbook/2026-04-29-nope-ablation-queued.md` — companion logbook marking this as queued for launch on or after 2026-05-01.
 - [ ] Update `docs/logbook/2026-04-28-option-b-and-upstream-pr.md` to add NoPE ablation as a new open item.
 
-All code artifacts land on a dedicated branch (`feat/nope-ablation`). The three training runs consume only the `NOPE_VARIANT` env knob at submission time; no code changes between runs.
+All code artifacts land on a dedicated branch (`feat/nope-ablation`). The three training runs differ only in the `--variant` CLI flag passed at submission time; no code changes between runs.
 
 ## 10. Open questions (to resolve during the implementation-plan phase)
 
