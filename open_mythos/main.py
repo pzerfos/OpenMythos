@@ -936,6 +936,7 @@ class RecurrentBlock(nn.Module):
         """
         super().__init__()
         self.cfg = cfg
+        self.pe_mode = cfg.pe_mode_recurrent
         self.block = TransformerBlock(cfg, use_moe=True)
         self.injection = LTIInjection(cfg.dim)
         self.act = ACTHalting(cfg.dim)
@@ -987,7 +988,9 @@ class RecurrentBlock(nn.Module):
             h_loop = loop_index_embedding(h, t, self.loop_dim)
             combined = self.norm(h_loop + e)
             cache_key = f"recurrent_loop_{t}"
-            trans_out = self.block(combined, freqs_cis, mask, kv_cache, cache_key)
+            trans_out = self.block(
+                combined, freqs_cis, mask, kv_cache, cache_key, self.pe_mode
+            )
             trans_out = trans_out + self.lora(trans_out, t)
             h = self.injection(h, e, trans_out)
 

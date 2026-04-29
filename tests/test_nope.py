@@ -157,3 +157,41 @@ def test_transformer_block_plumbs_pe_mode():
         out_nope = block(x, freqs_cis, pe_mode="nope")
     assert out_rope.shape == (1, 6, cfg.dim)
     assert not torch.allclose(out_rope[:, 1:], out_nope[:, 1:], atol=1e-3)
+
+
+from open_mythos.main import RecurrentBlock
+
+
+def test_recurrent_block_pe_mode_stored_and_used():
+    """RecurrentBlock should read cfg.pe_mode_recurrent at init and use it
+    when invoking its inner TransformerBlock on each loop iteration."""
+    cfg = _mla_test_cfg()
+    cfg.pe_mode_recurrent = "nope"
+    cfg.max_loop_iters = 2
+    cfg.lora_rank = 4
+    cfg.n_experts = 2
+    cfg.n_shared_experts = 1
+    cfg.n_experts_per_tok = 1
+    cfg.expert_dim = 32
+
+    torch.manual_seed(0)
+    rec = RecurrentBlock(cfg)
+    rec.eval()
+    freqs_cis = precompute_rope_freqs(
+        cfg.qk_rope_head_dim, cfg.max_seq_len, 500000.0
+    )[:6]
+    h = torch.randn(1, 6, cfg.dim)
+    e = torch.randn(1, 6, cfg.dim)
+    with torch.no_grad():
+        out_nope = rec(h, e, freqs_cis, n_loops=2, bypass_act=True)
+
+    cfg.pe_mode_recurrent = "rope"
+    torch.manual_seed(0)
+    rec2 = RecurrentBlock(cfg)
+    rec2.eval()
+    rec2.load_state_dict(rec.state_dict())
+    with torch.no_grad():
+        out_rope = rec2(h, e, freqs_cis, n_loops=2, bypass_act=True)
+
+    # Same weights, same input, different pe_mode → different output at later positions
+    assert not torch.allclose(out_rope[:, 1:], out_nope[:, 1:], atol=1e-3)
