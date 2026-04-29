@@ -327,3 +327,35 @@ def test_kv_cache_prefill_decode_equals_one_shot_under_nope():
 
     # Compare the logits of the last decode step to the one-shot logits at that pos
     assert torch.allclose(out_incr_last[:, 0], out_oneshot[:, 5], atol=1e-4)
+
+
+from open_mythos.variants import (
+    mythos_1b,
+    mythos_1b_scoped_nope,
+    mythos_1b_partial_nope,
+)
+
+
+def test_mythos_1b_scoped_nope_sets_only_recurrent_to_nope():
+    cfg = mythos_1b_scoped_nope()
+    base = mythos_1b()
+    assert cfg.pe_mode_prelude == "rope"
+    assert cfg.pe_mode_coda == "rope"
+    assert cfg.pe_mode_recurrent == "nope"
+    # All other fields match the baseline
+    assert cfg.dim == base.dim
+    assert cfg.n_experts == base.n_experts
+    assert cfg.qk_rope_head_dim == base.qk_rope_head_dim
+    assert cfg.qk_nope_head_dim == base.qk_nope_head_dim
+
+
+def test_mythos_1b_partial_nope_collapses_mla_rope_dim():
+    cfg = mythos_1b_partial_nope()
+    base = mythos_1b()
+    assert cfg.pe_mode_prelude == "rope"
+    assert cfg.pe_mode_coda == "rope"
+    assert cfg.pe_mode_recurrent == "rope"
+    assert cfg.qk_rope_head_dim == 0
+    # Budget is reassigned: total head dim preserved
+    assert cfg.qk_nope_head_dim == base.qk_nope_head_dim + base.qk_rope_head_dim
+    assert cfg.dim == base.dim
