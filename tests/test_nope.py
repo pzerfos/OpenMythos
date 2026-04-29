@@ -285,3 +285,45 @@ def test_state_dict_round_trip_across_pe_modes():
     # Shapes match exactly
     for k, v in m_baseline.state_dict().items():
         assert v.shape == m_scoped.state_dict()[k].shape, k
+
+
+def test_kv_cache_prefill_decode_equals_one_shot_under_nope():
+    """Under pe_mode='nope' in the recurrent block, incremental prefill+decode
+    must produce the same logits as one-shot prefill over the full sequence.
+    Failure would indicate the cache mixes rotated and unrotated keys."""
+    cfg = _tiny_mythos_cfg()
+    cfg.pe_mode_recurrent = "nope"
+
+    torch.manual_seed(0)
+    model = OpenMythos(cfg)
+    model.eval()
+
+    input_ids = torch.randint(0, cfg.vocab_size, (1, 6))
+
+    # One-shot: prefill the whole sequence
+    cache_oneshot: dict = {}
+    with torch.no_grad():
+        out_oneshot = model(
+            input_ids, n_loops=2, kv_cache=cache_oneshot, bypass_act=True
+        )
+
+    # Incremental: prefill first 4 tokens, then decode tokens 5 and 6 one by one
+    cache_incr: dict = {}
+    with torch.no_grad():
+        _ = model(
+            input_ids[:, :4], n_loops=2, kv_cache=cache_incr, start_pos=0,
+            bypass_act=True,
+        )
+        # Decode token at position 4
+        _ = model(
+            input_ids[:, 4:5], n_loops=2, kv_cache=cache_incr, start_pos=4,
+            bypass_act=True,
+        )
+        # Decode token at position 5
+        out_incr_last = model(
+            input_ids[:, 5:6], n_loops=2, kv_cache=cache_incr, start_pos=5,
+            bypass_act=True,
+        )
+
+    # Compare the logits of the last decode step to the one-shot logits at that pos
+    assert torch.allclose(out_incr_last[:, 0], out_oneshot[:, 5], atol=1e-4)
