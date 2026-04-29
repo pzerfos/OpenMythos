@@ -489,6 +489,13 @@ class MoEFFN(nn.Module):
         self.router = nn.Linear(cfg.dim, cfg.n_experts, bias=False)
         # load-balancing bias adjusted externally during training; not a gradient param
         self.register_buffer("router_bias", torch.zeros(cfg.n_experts))
+        # Running count of (token, slot) pairs each expert was selected for since
+        # the last update_router_bias() call. Non-persistent: resets every step.
+        self.register_buffer(
+            "expert_counts",
+            torch.zeros(cfg.n_experts, dtype=torch.int64),
+            persistent=False,
+        )
 
         self.routed_experts = nn.ModuleList(
             [Expert(cfg.dim, cfg.expert_dim) for _ in range(cfg.n_experts)]
@@ -523,6 +530,13 @@ class MoEFFN(nn.Module):
         topk_scores = topk_scores / topk_scores.sum(dim=-1, keepdim=True).clamp(
             min=1e-9
         )
+
+        # Accumulate selection counts for load-balance bias update. Detached,
+        # integer, no gradient — read and reset by update_router_bias().
+        with torch.no_grad():
+            self.expert_counts += torch.bincount(
+                topk_idx.reshape(-1), minlength=self.n_experts
+            )
 
         # Grouped expert dispatch — one expert call per active expert.
         # Flatten all topk (token, expert) pairs, sort by expert ID,
@@ -560,6 +574,50 @@ class MoEFFN(nn.Module):
             out = out + shared(flat)
 
         return out.view(B, T, D)
+
+    @torch.no_grad()
+    def update_router_bias(self, rate: float, ddp: bool = False) -> dict:
+        """
+        Apply DeepSeek-V3 aux-loss-free load balancing (Algorithm 1).
+
+        Called once per optimizer step from the training loop. Shifts
+        router_bias so underused experts get picked more often. Does not
+        affect the forward-pass gradient: gating weights are softmax(logits),
+        not softmax(logits + router_bias).
+
+        Args:
+            rate -- step size; DeepSeek-V3 uses 1e-3. Pass 0.0 to disable.
+            ddp  -- when True, all-reduce expert_counts across ranks before
+                    computing the update so every rank agrees.
+
+        Returns:
+            dict with diagnostic stats:
+                max_over_mean    -- hottest expert's count / uniform target
+                min_over_mean    -- coldest expert's count / uniform target
+                stddev_over_mean -- spread of utilization
+        """
+        if ddp:
+            import torch.distributed as dist
+            dist.all_reduce(self.expert_counts, op=dist.ReduceOp.SUM)
+
+        total = self.expert_counts.sum()
+        # target = mean count per expert; nonzero as long as this MoE layer fired
+        target = total.float() / self.n_experts
+        if target == 0:
+            # layer never fired this step (shouldn't happen in normal training)
+            return {"max_over_mean": 0.0, "min_over_mean": 0.0, "stddev_over_mean": 0.0}
+
+        counts_f = self.expert_counts.float()
+        diff = counts_f - target
+        # sign() gives ±1 for over/underused, 0 for exactly-at-target
+        self.router_bias -= rate * torch.sign(diff).to(self.router_bias.dtype)
+        stats = {
+            "max_over_mean": (counts_f.max() / target).item(),
+            "min_over_mean": (counts_f.min() / target).item(),
+            "stddev_over_mean": (counts_f.std() / target).item(),
+        }
+        self.expert_counts.zero_()
+        return stats
 
 
 # ---------------------------------------------------------------------------
@@ -1107,6 +1165,45 @@ class OpenMythos(nn.Module):
 
         x = self.norm(x)
         return self.head(x.to(self.head.weight.dtype))
+
+    @torch.no_grad()
+    def update_router_biases(self, rate: float, ddp: bool = False) -> dict:
+        """
+        Apply DeepSeek-V3 aux-loss-free load balancing to every MoE layer.
+
+        Walks all MoEFFN modules, runs update_router_bias on each, returns
+        aggregated worst-case statistics across layers.
+
+        Args:
+            rate -- step size (0.0 disables).
+            ddp  -- all-reduce counts across ranks inside each layer's update.
+
+        Returns:
+            dict with the worst (most imbalanced) stats across MoE layers:
+                max_over_mean, min_over_mean, stddev_over_mean.
+            Returns zeros when there are no MoE layers or rate == 0.0.
+        """
+        if rate == 0.0:
+            return {"max_over_mean": 0.0, "min_over_mean": 0.0, "stddev_over_mean": 0.0}
+
+        worst_max = 0.0
+        worst_min = float("inf")
+        worst_std = 0.0
+        saw_layer = False
+        for module in self.modules():
+            if isinstance(module, MoEFFN):
+                stats = module.update_router_bias(rate, ddp=ddp)
+                worst_max = max(worst_max, stats["max_over_mean"])
+                worst_min = min(worst_min, stats["min_over_mean"])
+                worst_std = max(worst_std, stats["stddev_over_mean"])
+                saw_layer = True
+        if not saw_layer:
+            return {"max_over_mean": 0.0, "min_over_mean": 0.0, "stddev_over_mean": 0.0}
+        return {
+            "max_over_mean": worst_max,
+            "min_over_mean": worst_min,
+            "stddev_over_mean": worst_std,
+        }
 
     @torch.no_grad()
     def generate(
