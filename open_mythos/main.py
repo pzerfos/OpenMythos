@@ -1188,13 +1188,21 @@ class OpenMythos(nn.Module):
         mask = self._causal_mask(T, device, x.dtype) if T > 1 else None
 
         for i, layer in enumerate(self.prelude):
-            x = layer(x, freqs_cis, mask, kv_cache, cache_key=f"prelude_{i}")
+            x = layer(
+                x, freqs_cis, mask, kv_cache,
+                cache_key=f"prelude_{i}",
+                pe_mode=self.cfg.pe_mode_prelude,
+            )
 
         e = x  # encoded input frozen for injection every loop
         x = self.recurrent(x, e, freqs_cis, mask, n_loops, kv_cache, bypass_act)
 
         for i, layer in enumerate(self.coda):
-            x = layer(x, freqs_cis, mask, kv_cache, cache_key=f"coda_{i}")
+            x = layer(
+                x, freqs_cis, mask, kv_cache,
+                cache_key=f"coda_{i}",
+                pe_mode=self.cfg.pe_mode_coda,
+            )
 
         x = self.norm(x)
         return self.head(x.to(self.head.weight.dtype))

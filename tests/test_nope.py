@@ -159,7 +159,7 @@ def test_transformer_block_plumbs_pe_mode():
     assert not torch.allclose(out_rope[:, 1:], out_nope[:, 1:], atol=1e-3)
 
 
-from open_mythos.main import RecurrentBlock
+from open_mythos.main import OpenMythos, RecurrentBlock
 
 
 def test_recurrent_block_pe_mode_stored_and_used():
@@ -195,3 +195,67 @@ def test_recurrent_block_pe_mode_stored_and_used():
 
     # Same weights, same input, different pe_mode → different output at later positions
     assert not torch.allclose(out_rope[:, 1:], out_nope[:, 1:], atol=1e-3)
+
+
+def _tiny_mythos_cfg() -> MythosConfig:
+    cfg = _mla_test_cfg()
+    cfg.max_loop_iters = 2
+    cfg.prelude_layers = 1
+    cfg.coda_layers = 1
+    cfg.lora_rank = 4
+    cfg.n_experts = 2
+    cfg.n_shared_experts = 1
+    cfg.n_experts_per_tok = 1
+    cfg.expert_dim = 32
+    return cfg
+
+
+def test_openmythos_routes_pe_mode_prelude():
+    """Setting pe_mode_prelude='nope' must change model output — demonstrates
+    the prelude loop in OpenMythos.forward propagates pe_mode_prelude to the
+    TransformerBlock call."""
+    cfg_all_rope = _tiny_mythos_cfg()
+    cfg_nope_prelude = _tiny_mythos_cfg()
+    cfg_nope_prelude.pe_mode_prelude = "nope"
+
+    torch.manual_seed(0)
+    m1 = OpenMythos(cfg_all_rope)
+    m1.eval()
+
+    torch.manual_seed(1)
+    m2 = OpenMythos(cfg_nope_prelude)
+    m2.eval()
+    m2.load_state_dict(m1.state_dict())
+
+    input_ids = torch.randint(0, cfg_all_rope.vocab_size, (1, 6))
+    with torch.no_grad():
+        out_all_rope = m1(input_ids, n_loops=2, bypass_act=True)
+        out_nope_prelude = m2(input_ids, n_loops=2, bypass_act=True)
+
+    # Same weights, same input — different prelude pe_mode must change logits
+    assert not torch.allclose(out_all_rope, out_nope_prelude, atol=1e-3)
+
+
+def test_openmythos_routes_pe_mode_coda():
+    """Analogous test for pe_mode_coda."""
+    cfg_all_rope = _tiny_mythos_cfg()
+    cfg_nope_coda = _tiny_mythos_cfg()
+    cfg_nope_coda.pe_mode_coda = "nope"
+
+    torch.manual_seed(0)
+    m1 = OpenMythos(cfg_all_rope)
+    m1.eval()
+
+    torch.manual_seed(1)
+    m2 = OpenMythos(cfg_nope_coda)
+    m2.eval()
+    m2.load_state_dict(m1.state_dict())
+
+    input_ids = torch.randint(0, cfg_all_rope.vocab_size, (1, 6))
+    with torch.no_grad():
+        out_all_rope = m1(input_ids, n_loops=2, bypass_act=True)
+        out_nope_coda = m2(input_ids, n_loops=2, bypass_act=True)
+
+    # atol=1e-6: the coda NoPE effect is small (1 layer, then norm+head compresses
+    # it to ~6e-6 max diff), but must be non-zero — use tighter tolerance than prelude.
+    assert not torch.allclose(out_all_rope, out_nope_coda, atol=1e-6)
