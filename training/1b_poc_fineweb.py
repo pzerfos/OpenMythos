@@ -421,7 +421,7 @@ def main():
     # router_bias after every optimizer step so underused experts get picked
     # more often, without distorting the forward-pass gradient. Set to 0.0 to
     # disable. DeepSeek-V3 paper uses 1e-3.
-    router_bias_update_rate = 0.0
+    router_bias_update_rate = 1e-3
 
     seq_len = 2048
     micro_batch = 1
