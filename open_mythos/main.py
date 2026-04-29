@@ -596,6 +596,11 @@ class MoEFFN(nn.Module):
                 min_over_mean    -- coldest expert's count / uniform target
                 stddev_over_mean -- spread of utilization
         """
+        # INVARIANT: all_reduce(expert_counts) must run on every rank
+        # unconditionally whenever ddp=True. Any rank-local early-exit above
+        # this collective re-introduces the ACT-style deadlock class documented
+        # in docs/logbook/2026-04-23-act-fsdp-deadlock.md: one rank skips the
+        # collective, the others wait, NCCL watchdog fires after 600s.
         if ddp:
             import torch.distributed as dist
             dist.all_reduce(self.expert_counts, op=dist.ReduceOp.SUM)
@@ -603,11 +608,13 @@ class MoEFFN(nn.Module):
         total = self.expert_counts.sum()
         # target = mean count per expert; nonzero as long as this MoE layer fired
         target = total.float() / self.n_experts
+        counts_f = self.expert_counts.float()
         if target == 0:
-            # layer never fired this step (shouldn't happen in normal training)
+            # Layer never fired this step (shouldn't happen in normal training,
+            # but can in tests with zero input). Reset counts and return zeros.
+            self.expert_counts.zero_()
             return {"max_over_mean": 0.0, "min_over_mean": 0.0, "stddev_over_mean": 0.0}
 
-        counts_f = self.expert_counts.float()
         diff = counts_f - target
         # sign() gives ±1 for over/underused, 0 for exactly-at-target
         self.router_bias -= rate * torch.sign(diff).to(self.router_bias.dtype)
@@ -1172,37 +1179,58 @@ class OpenMythos(nn.Module):
         Apply DeepSeek-V3 aux-loss-free load balancing to every MoE layer.
 
         Walks all MoEFFN modules, runs update_router_bias on each, returns
-        aggregated worst-case statistics across layers.
+        the worst-case statistics across layers.
 
         Args:
             rate -- step size (0.0 disables).
             ddp  -- all-reduce counts across ranks inside each layer's update.
 
         Returns:
-            dict with the worst (most imbalanced) stats across MoE layers:
-                max_over_mean, min_over_mean, stddev_over_mean.
+            dict with worst-case stats across MoE layers:
+                max_over_mean     -- max across layers (hottest expert anywhere)
+                stddev_over_mean  -- max std/mean across layers
+                imbalance_ratio   -- max(max_over_mean, 1/max(min_over_mean, eps))
+                                     across layers; symmetric single-scalar
+                                     imbalance indicator. 1.0 = perfect balance,
+                                     grows without bound as any expert gets hot
+                                     *or* any expert dies.
             Returns zeros when there are no MoE layers or rate == 0.0.
         """
         if rate == 0.0:
-            return {"max_over_mean": 0.0, "min_over_mean": 0.0, "stddev_over_mean": 0.0}
+            return {
+                "max_over_mean": 0.0,
+                "stddev_over_mean": 0.0,
+                "imbalance_ratio": 0.0,
+            }
 
         worst_max = 0.0
-        worst_min = float("inf")
         worst_std = 0.0
+        worst_imbalance = 0.0
         saw_layer = False
+        eps = 1e-6
         for module in self.modules():
             if isinstance(module, MoEFFN):
                 stats = module.update_router_bias(rate, ddp=ddp)
                 worst_max = max(worst_max, stats["max_over_mean"])
-                worst_min = min(worst_min, stats["min_over_mean"])
                 worst_std = max(worst_std, stats["stddev_over_mean"])
+                # Symmetric imbalance: hot experts pull max_over_mean above 1,
+                # cold/dead experts pull min_over_mean below 1 (or to 0).
+                # Taking the larger of "hot factor" and "cold factor" turns
+                # both failure modes into one growing scalar.
+                cold_factor = 1.0 / max(stats["min_over_mean"], eps)
+                hot_factor = stats["max_over_mean"]
+                worst_imbalance = max(worst_imbalance, hot_factor, cold_factor)
                 saw_layer = True
         if not saw_layer:
-            return {"max_over_mean": 0.0, "min_over_mean": 0.0, "stddev_over_mean": 0.0}
+            return {
+                "max_over_mean": 0.0,
+                "stddev_over_mean": 0.0,
+                "imbalance_ratio": 0.0,
+            }
         return {
             "max_over_mean": worst_max,
-            "min_over_mean": worst_min,
             "stddev_over_mean": worst_std,
+            "imbalance_ratio": worst_imbalance,
         }
 
     @torch.no_grad()

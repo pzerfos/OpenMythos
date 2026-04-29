@@ -162,3 +162,32 @@ Default on main remains `router_bias_update_rate = 0.0`. Enabling it mid-run is 
 
 - Diagnostic-only mode so we can measure imbalance on the current run without updating the bias.
 - Sensitivity sweep on `rate` (1e-4, 1e-3, 1e-2) at small scale to pick a safe value for the next run.
+
+---
+
+## Post-Merge Review Follow-ups (2026-04-29, branch `fix/router-bias-review-followups`)
+
+PR #8 was merged without a pre-merge review; running `pr-review-toolkit:code-reviewer` against the merged diff surfaced five findings. All five are addressed on the follow-up branch.
+
+### Blockers fixed
+
+1. **FSDP `MixedPrecision(buffer_dtype=bf16)` corrupts the new buffers.** bf16 can only represent integers exactly up to 256, so `expert_counts` (int64) would saturate under `all_reduce(SUM)` within one step; `router_bias` (fp32) updates of `1e-3` fall below bf16's relative resolution near 1.0 and would round divergently across ranks. Fixed by removing `buffer_dtype=amp_dtype` from the MixedPrecision policy in `training/1b_poc_fineweb.py`; buffers now keep their init dtypes. A comment in the training script records the reasoning.
+2. **Pinned comment on `all_reduce` invariant.** `update_router_bias` now carries an `INVARIANT:` comment referencing `docs/logbook/2026-04-23-act-fsdp-deadlock.md`, so future optimizations don't re-introduce the ACT-style collective-ordering deadlock by skipping the collective on some ranks.
+
+### Quality-of-evidence fixes
+
+3. **`test_router_bias_does_not_affect_gating_weights`** was using a uniform `+1e-6` bias, which never changes top-k by construction — passing even if the implementation were wrong. Rewritten with a non-uniform bias (+10 on cold experts, −10 on one hot one, in a regime with 100×dim logit gaps so top-k is preserved). Now meaningfully exercises the aux-loss-free property.
+4. **`test_update_router_bias_shifts_toward_balance`** was relying on `torch.topk` tie-breaking with zero logits, which is implementation-defined (differs between CPU and CUDA). Rewritten to set `router.weight` with a strict monotonic ordering so top-k is unambiguous on every backend.
+
+### Diagnostic improvement
+
+5. **`OpenMythos.update_router_biases` aggregation.** The original `min_over_mean = min(...)` across layers pins to 0 as soon as any layer has one cold expert, so the ClearML scalar stops distinguishing "one dead expert" from "catastrophic collapse". Replaced with an `imbalance_ratio` metric: `max(max_over_mean, 1/max(min_over_mean, eps))` per layer, worst across layers. 1.0 is perfect balance; both hot and cold experts drive it up symmetrically.
+
+### Verification
+
+- 333 tests pass (one new test covers the `imbalance_ratio` aggregation).
+- Default behavior unchanged: `router_bias_update_rate = 0.0` still short-circuits at the top level on every rank.
+
+### Non-issues (confirmed OK by the review)
+
+- Algorithm correctness, `persistent=False` on counts, state-dict compatibility with `step_0121000.pt`, `bincount` under `no_grad`, `torch.sign()` determinism after all-reduce, `rate=0.0` collective-exit safety.
