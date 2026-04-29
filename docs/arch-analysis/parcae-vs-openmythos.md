@@ -9,7 +9,7 @@
 | **Loop target** | Multiple shared core layers (2-8) looped as a group | Single transformer block looped T times |
 | **FFN type** | Dense: BaseMLP (ReLU^2) or GatedMLP | **MoE** in recurrent block (64-512 routed experts); dense SwiGLU in Prelude/Coda |
 | **Attention** | MHA with **GQA** support + optional **value embedding gates** | Swappable: **MLA** (default, DeepSeek-V2 style) or **GQA** |
-| **Scale** | 140M to **1.3B** (4 variants) | 1B to **1T** (7 variants) |
+| **Scale** | 140M to **1.3B** (4 variants, trained) | 1B to **1T** (7 variants defined; **only the 1B variant has been trained to date**) |
 | **State space** | Separate `recurrent_embedding_dimension` (can differ from model dim) + explicit C output projection | Recurrent state shares model dim; no separate output projection |
 
 Both projects share the Prelude/Core/Coda three-stage design and LTI-based stability guarantees, making them architecturally closer to each other than either is to LoopFormer (which loops all blocks uniformly with adaLN conditioning).
@@ -47,11 +47,11 @@ Parcae loops **multiple layers** (2-8) as the core block, meaning each "iteratio
 | **Remainder trick** | N/A | Yes - ensures probability mass sums to exactly 1.0 |
 | **Stability guarantee** | **Mathematical**: DiagonalInjection with `exp(-dt*A)` decay, spectral radius <= 1 | **Mathematical**: LTI spectral radius < 1 via ZOH discretization |
 | **Depth extrapolation** | Paper demonstrates test-time depth extrapolation beyond training depth | **Built-in**: LoRA scales clamp to last known value for unseen depths |
-| **Stochastic depth** | Yes - 6+ Poisson/curriculum sampling schemes | No |
-| **Iteration modes** | per-batch, per-sequence, per-token | Fixed T with ACT early exit |
+| **Stochastic depth** | Yes - 6+ Poisson/curriculum sampling schemes | **Yes** (default on main since PR #7): uniform `n_loops ~ U[1, 32]` per optimizer step, broadcast from rank 0 for FSDP collective-ordering safety |
+| **Iteration modes** | per-batch, per-sequence, per-token | Per-batch (all sequences share `n_loops` per step); ACT retained as opt-in alternative via `recurrent_mode="act"` |
 | **Truncated BPTT** | Yes - only last `k` iterations get gradients (saves memory) | No - full gradient through all iterations |
 
-This is a **key design divergence**: Parcae varies iteration count stochastically during training but runs fixed iterations at inference, while OpenMythos runs a fixed maximum but exits early per-position via ACT at both training and inference.
+The divergence here has narrowed since PR #7. Both projects now use stochastic depth during training — Parcae with rich Poisson/curriculum sampling plus truncated BPTT, OpenMythos with uniform per-step sampling and full BPTT. At inference, Parcae runs fixed iterations. OpenMythos runs either fixed iterations (`bypass_act=True`, default for stochastic-depth-trained checkpoints) or adapts per position via ACT (when the checkpoint was trained under `recurrent_mode="act"`). Checkpoints are cross-mode compatible.
 
 ## 4. Stability Mechanism Comparison
 
@@ -139,7 +139,12 @@ This is a fundamental design choice: Parcae relies on the **dynamical system its
 
 ### OpenMythos' Training
 
-Standard cross-entropy NTP loss. ACT adds a small ponder cost. No multi-trajectory or stochastic depth training.
+Standard cross-entropy NTP loss. Two switchable recipes controlled by the `recurrent_mode` local in the training script:
+
+- `"stochastic_depth"` (default on main since PR #7): `n_loops` sampled uniformly from `[stochastic_depth_min, stochastic_depth_max] = [1, 32]` once per optimizer step on rank 0, then broadcast to all ranks to prevent FSDP collective-ordering deadlock. ACT is bypassed (`bypass_act=True`).
+- `"act"`: original recipe — fixed `n_loops` with per-position ACT halting plus a small ponder cost.
+
+Checkpoints are cross-mode compatible: `ACTHalting` weights are always present in the state_dict and simply receive no gradient under `bypass_act=True`. DeepSeek-V3 aux-loss-free MoE load balancing (`router_bias_update_rate`) is implemented (PR #8/#9) and currently live at `1e-3` on the in-flight 10B-token run.
 
 ## 7. Loss Function
 
@@ -225,7 +230,7 @@ Predictions achieve 0.85-1.31% average error on held-out model scales.
 
 **Key result**: 770M Parcae matches or exceeds 1.3B standard Transformer on CORE benchmark, with 23-88% parameter efficiency gains.
 
-OpenMythos does not provide scaling law analysis; its focus is on production architecture at scale.
+OpenMythos does not provide scaling law analysis. Variants are defined up to 1T parameters, but only the 1B variant has been trained to date; scaling behavior beyond that is unverified.
 
 ## 11. Design Philosophy
 
@@ -242,13 +247,13 @@ OpenMythos does not provide scaling law analysis; its focus is on production arc
 
 ### OpenMythos
 
-- **Production-oriented architecture**: Designed to scale from 1B to 1T
-- **Single-block recurrence**: Maximizes weight sharing with one looped block
-- **Runtime adaptivity**: ACT provides per-position variable compute at both training and inference
-- **Efficiency at scale**: MoE for parameter efficiency, MLA for KV cache compression
+- **Research architecture with extreme-scale ambitions**: variants defined from 1B to 1T; only the 1B variant has been trained to date
+- **Single-block recurrence**: maximizes weight sharing with one looped block
+- **Switchable adaptivity**: ACT per-position early exit OR uniform stochastic-depth sampling during training; runtime-selectable, checkpoints are cross-compatible
+- **Efficiency targets**: MoE for sparse parameter scaling, MLA for 10–20× KV cache compression vs standard attention
 - **Explicit depth conditioning**: LoRA + sinusoidal embeddings give fine-grained per-iteration control
-- **Long context**: Supports up to 1M context at larger scales
-- Uses PyTorch native FSDP for production deployment
+- **Long context target**: RoPE theta = 500K–2M aims at long-context training at larger scales; not yet verified in practice
+- Uses PyTorch FSDP1 today; FSDP2 migration is under evaluation (feasibility benchmark showed a 15% step-time reduction on the stochastic-depth recipe, but no final decision has been made)
 
 ## 12. Key Innovations Unique to Each
 
@@ -256,7 +261,7 @@ OpenMythos does not provide scaling law analysis; its focus is on production arc
 
 - **Multi-layer looped core block** (2-8 shared layers iterated as a group, not just 1 block)
 - **Separate recurrent embedding dimension** with C output projection (state space can differ from model dim)
-- **Stochastic depth sampling** with 6+ scheduling schemes (Poisson, curriculum, fixed)
+- **Rich stochastic depth sampling**: 6+ Poisson/curriculum/fixed schemes (vs OpenMythos's simpler uniform `U[1, 32]`)
 - **Truncated BPTT** with configurable forward-only / backprop split
 - **Per-sequence depth sampling** (each sequence independently samples its iteration count)
 - **MuonAdamW optimizer** (momentum-based with per-parameter scaling)
@@ -268,14 +273,15 @@ OpenMythos does not provide scaling law analysis; its focus is on production arc
 
 ### OpenMythos Only
 
-- **Adaptive Computation Time** with per-position early exit and remainder trick
-- **MoE in recurrent block only** (dense elsewhere) with aux-loss-free load balancing
+- **Adaptive Computation Time** with per-position early exit and remainder trick (opt-in via `recurrent_mode="act"`, preserved alongside the stochastic-depth recipe)
+- **MoE in recurrent block only** (dense elsewhere) with **live aux-loss-free load balancing** (DeepSeek-V3 Algorithm 1; PR #8/#9 wired up the update, enabled at `rate=1e-3` on the in-flight 10B run)
 - **Multi-Latent Attention (MLA)** for 10-20x KV cache compression
 - **Depth-wise LoRA** with per-loop scale embeddings
 - **Sinusoidal loop-index embedding** in first `dim/8` channels
 - **Depth extrapolation** via LoRA clamping to last known value
-- **High RoPE theta** (500K-2M) for long-context support up to 1M tokens
+- **High RoPE theta** (500K-2M) designed for long-context support; untested at scale
 - **Fine-grained MoE** with small expert dimensions for sparse FLOPs
+- **Rank-0 broadcast of `n_loops`** for FSDP collective-ordering safety (analogous in purpose to Parcae's `lockstep_n`/`lockstep_k` seeded-RNG mechanism)
 
 ## 13. Shared Design Decisions
 
@@ -294,6 +300,8 @@ Both projects converge on several architectural choices, suggesting a common lin
 | **Cosine decay** | Learning rate schedule with warmup |
 | **FineWeb-Edu** | Training data source |
 | **2048 seq length** | Comparable training sequence length |
+| **FSDP-safe depth sampling** | Parcae: seeded `torch.Generator` with `lockstep_n`/`lockstep_k` ensuring ranks agree. OpenMythos: sample on rank 0 and broadcast. Both avoid NCCL collective-ordering deadlock. |
+| **Stochastic depth during training** | Parcae: Poisson/curriculum schemes with truncated BPTT. OpenMythos: uniform `U[1, 32]` with full BPTT. Same principle, different sophistication. |
 
 Both reference the Parcae paper's dynamical systems formulation of looped transformer stability.
 
@@ -303,7 +311,7 @@ Both reference the Parcae paper's dynamical systems formulation of looped transf
 |---|--------|------------|
 | **Strength** | Rigorous scaling laws; stochastic depth for training robustness; simpler dense architecture; formal stability theory | Runtime adaptivity via ACT; extreme scaling (1T); MoE/MLA efficiency; long context (1M) |
 | **Tradeoff** | No adaptive compute at inference; smaller scale (max 1.3B); shorter context (2048) | More complex architecture; MoE routing overhead; more hyperparameters to tune |
-| **Best for** | Understanding how looped transformers scale; dense-model research | Building production looped-transformer systems at massive scale |
+| **Best for** | Understanding how looped transformers scale; dense-model research | Researching scale-up recipes for sparse (MoE), adaptive-depth looped transformers; trained only at 1B to date so extreme-scale behavior is unverified |
 | **Risk** | Fixed inference compute may waste FLOPs on easy tokens | ACT overhead; MoE load balancing complexity; MLA implementation complexity |
 
 ## 15. Summary
@@ -318,7 +326,7 @@ Where they diverge is along three axes:
 
 3. **Theory vs production**: Parcae's primary contribution is scaling laws and the dynamical systems stability framework. OpenMythos's contribution is a production architecture that applies these principles at 1B-1T scale with efficiency mechanisms.
 
-Parcae is the theoretical foundation and scaling-law research platform. OpenMythos is the production architecture that builds on those foundations.
+Parcae is the theoretical foundation and scaling-law research platform (verified up to 1.3B). OpenMythos is a research architecture that applies those principles to sparse (MoE, MLA) and adaptive-depth (ACT or stochastic) looping, with variants defined up to 1T but trained only at 1B to date.
 
 ## 16. Quick Reference
 
@@ -329,12 +337,52 @@ Parcae is the theoretical foundation and scaling-law research platform. OpenMyth
 | Axis | Parcae | OpenMythos |
 |------|--------|------------|
 | Core block | 2-8 shared layers per iteration | 1 block per iteration |
-| Halting | Stochastic depth at training, fixed at inference | ACT with per-position early exit |
+| Halting | Stochastic depth at training, fixed at inference | Switchable: ACT (per-position early exit) OR uniform stochastic depth (default on main) |
 | FFN | Dense (ReLU^2) | MoE (recurrent block only) |
 | Attention | GQA + value embedding gates | MLA (10-20x cache compression) |
 | Loop conditioning | No explicit loop embedding; LTI state evolution differentiates iterations | Sinusoidal loop-index + depth-wise LoRA |
-| Scale | 140M-1.3B (4 variants) | 1B-1T (7 variants) |
+| Scale | 140M-1.3B (4 variants, trained) | 1B-1T (7 variants defined; only 1B trained) |
 | Scaling laws | Formal: `mu_rec ~ FLOP^0.40`, `D ~ FLOP^0.78` | Not analyzed |
-| Philosophy | Theory + scaling law research | Production architecture at scale |
+| Philosophy | Theory + scaling law research | Research arch for sparse + adaptive-depth looping; extreme-scale ambitions, unverified |
 
-**Bottom line**: Parcae provides the theoretical framework and scaling laws for stable looped transformers. OpenMythos applies those principles in a production architecture with MoE, MLA, and ACT to scale to 1T parameters.
+**Bottom line**: Parcae provides the theoretical framework and scaling laws for stable looped transformers, verified up to 1.3B. OpenMythos applies those principles in a research architecture with MoE, MLA, and switchable ACT/stochastic-depth looping; variants are defined up to 1T but only the 1B variant has been trained to date.
+
+## 17. Cross-Pollination — Ideation (Not Implemented)
+
+> **Status: exploratory.** Nothing in this section has been implemented, decided, or committed to. Items are ranked by estimated ROI and compatibility with the current OpenMythos stack as a menu of possible future directions, not a roadmap. Each would require its own design, ablation, and sign-off before landing.
+
+### Ideas from Parcae that could be ported to OpenMythos
+
+| # | Idea | Compatibility | Rough effort | Why it might be worth considering |
+|---|---|---|---|---|
+| 1 | **Truncated BPTT** (first `n−k` iterations under `torch.no_grad()`, last `k` with gradients) | High | ~1 day + tests | Biggest memory lever in the list. Full BPTT's memory cost scales linearly with `n_loops`, limiting how deep we can train. With `k≪n_loops` we could train at deeper targets on the same hardware. Parcae hit a known FSDP issue with `no_grad` + `find_unused_parameters=False` (`parcae_lm/models/parcae/parcae.py:297-299`); the workaround is documented there. MoE `expert_counts` accumulation under `no_grad` is fine (int64 buffer, gradient-free). |
+| 2 | **Fused Triton CE + z-regularization + logit softcap** | High (architecture-orthogonal) | ~0.5 day | Training-loop-only change. Parcae's three loss variants (`full-triton`, `cce`, `hhe`) are drop-in; `logits.logsumexp(-1).pow(2).mean()` and `softcap * tanh(logits/softcap)` are additive stability tweaks with no architectural coupling. |
+| 3 | **Per-sequence depth sampling** with `torch.where` gating | High | ~1 day | Today `n_loops` is sampled once per optimizer step on rank 0 and applied to the whole batch. Per-sequence sampling (as in `parcae.py:337-356`) reduces the loss-spike variance from shallow-sample steps. FSDP-safe if all ranks iterate to the same max depth and mask per-sample. |
+| 4 | **Poisson-truncated-full sampling** (vs current uniform) | High | hours | Drop-in replacement for the `random.randint(min, max)` call on rank 0. Parcae's default sampling scheme skews coverage toward typical depths while guaranteeing occasional deeper/shallower draws — plausibly a better distribution than flat uniform. |
+| 5 | **Curriculum depth ramp** (linear or sqrt over N steps) | High | hours | Slots into the same sampler. Useful for scale-up runs: start shallow so the early loss drop is cheap, ramp to target. Parcae offers both shapes out of the box (`parcae.py:428-442`). |
+| 6 | **Prelude-norm** (extra RMSNorm between Prelude and recurrent block) | Trivial | minutes | All 4 Parcae variants enable it (`prelude_norm=True`). One `nn.RMSNorm` instance and one line in `forward`. Would need an ablation before committing. |
+| 7 | **`_no_weight_decay` on LTI SSM params** (`log_A`, `log_dt`, `B`) | Trivial | minutes | Parcae marks its SSM params this way (`injection.py:31,35,40`). Needs a check of whether OpenMythos's optimizer setup already excludes them; if not, one-line fix in the param-group split. |
+| 8 | **Identity-initialized learnable `B` matrix** (vs current scalar `0.1 * ones(dim)`) | Medium | ~0.5 day | More parameters per `LTIInjection`, but Parcae's identity init provides cleaner signal preservation at step 0. Could be ablated at 1B. |
+| 9 | **Scaled-zero + orthogonal init** | Medium | ~1 day + ablation | Architecture-agnostic but requires controlled comparison; changing init mid-recipe is risky without evidence. |
+| 10 | **MuonAdamW optimizer** | Medium (orthogonal but invasive) | ~2–3 days | Parcae uses LR = 8e-3 with MuonAdamW; OpenMythos uses 3e-4 with fused AdamW. Potential training-efficiency win but demands careful re-tuning, and Muon × MoE is untested. |
+| 11 | **Best-fit token packing** | Medium (dataloader change only) | ~1–2 days | Pure throughput win (~100% token utilization vs standard padding). Independent of model architecture. |
+| 12 | **Value embeddings on alternating layers** | Low | multi-day | Each VE layer adds `vocab × kv_dim` parameters (~33M per layer at our vocab=32k, kv_dim=1024). Unclear ROI on top of MoE's existing capacity mechanism. Defer. |
+
+### Architecturally incompatible
+
+These Parcae design choices would fundamentally conflict with the current OpenMythos architecture and are **not suitable for porting** without a full redesign:
+
+- **Multi-layer core block** (Parcae's 2–8 shared layers per iteration) — contradicts OpenMythos's single-block-shared-weights philosophy; would dilute parameter efficiency and complicate MoE-per-recurrent-block routing.
+- **Separate `recurrent_embedding_dimension` + learned C output projection** — would require replacing `LTIInjection` wholesale and would break state-dict compatibility with every existing checkpoint.
+- **Dense-only architecture** — OpenMythos is committed to MoE for sparse scaling; regressing to dense defeats the parameter-efficiency motivation.
+- **Injection ordering** (Parcae applies `adapter(x, e)` **before** the core layers; OpenMythos adds the transformer output **into** the LTI update) — flipping the ordering would require re-deriving the stability bound with the loop-index embedding and LoRA delta in the residual path.
+
+### Top-3 candidates for a closer look
+
+If and when we decide to pursue any of these, the three with the best signal-to-noise ratio for OpenMythos specifically are:
+
+1. **Truncated BPTT** — unlocks training at deeper `n_loops` targets under the same memory budget.
+2. **Fused CE + z-reg + logit softcap** — measured loss-quality wins in Parcae with zero architectural coupling.
+3. **Per-sequence or Poisson-truncated-full depth sampling** — refinements of the stochastic-depth recipe already on main.
+
+All three compose cleanly with MoE, MLA, ACT, and the current LTI injection, and none of them touch checkpoint-persistent state.
