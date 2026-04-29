@@ -191,3 +191,14 @@ PR #8 was merged without a pre-merge review; running `pr-review-toolkit:code-rev
 ### Non-issues (confirmed OK by the review)
 
 - Algorithm correctness, `persistent=False` on counts, state-dict compatibility with `step_0121000.pt`, `bincount` under `no_grad`, `torch.sign()` determinism after all-reduce, `rate=0.0` collective-exit safety.
+
+### Status: merged (2026-04-29)
+
+- PR #8 `feat(moe): DeepSeek-V3 aux-loss-free router load balancing` merged as `c41469e`.
+- PR #9 `fix(moe): address post-merge review findings on router_bias PR` merged as `0586f2f`, addressing all five review findings plus two low-priority nits caught by the pre-merge review (aggregator pathology when a layer never fires, mirrored INVARIANT comment in the caller). 334 tests passing.
+- Feature remains **off by default** (`router_bias_update_rate = 0.0`); turning it on is a separate decision for the next scale-up run.
+
+### Follow-ups still open (not part of this feature)
+
+- Diagnostic-only mode so we can measure imbalance on the in-flight 10B run (job 67208) without updating the bias mid-training.
+- Sensitivity sweep on `rate` (1e-4, 1e-3, 1e-2) at small scale to pick a safe value for the next run.

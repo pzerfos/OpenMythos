@@ -108,8 +108,8 @@ Generic cleanups applied to the upstream version of the training script:
 All ACT-architecture uncertainty is resolved (Option B chosen and built). Remaining items from prior logbooks that are still open:
 
 1. **lm-eval-harness integration** — benchmark comparison (HellaSwag, ARC, MMLU) with published models of similar size. Not yet started.
-2. **Fix 14 pre-existing test failures** — 13 RoPE dimension mismatches after upstream flash-attn merge + 1 LTI spectral-radius strict-inequality boundary. Deferred; do not block current training.
-3. **`router_bias` load balancing** (pzerfos/OpenMythos#3) — bias is initialized but never updated during training. Expert utilization imbalance may grow with longer training. Deferred.
+2. ~~**Fix 14 pre-existing test failures**~~ — **Resolved 2026-04-29** in commit `ac3091a`: sliced RoPE `freqs_cis` to `T` in tests that bypass `OpenMythos.forward`, tightened LTI clamp to keep `ρ(A) < 1` strictly under fp32. 325 → 332 tests passing.
+3. ~~**`router_bias` load balancing**~~ (pzerfos/OpenMythos#3) — **Resolved 2026-04-29** via PR #8 (merge `c41469e`) + PR #9 follow-up fixes (merge `0586f2f`). DeepSeek-V3 Algorithm 1 wired up with FSDP-safe `all_reduce`, pinned deadlock-invariant comments, robust tests. Disabled by default (`router_bias_update_rate = 0.0`); enable at the next scale-up from a balanced starting point. See `docs/logbook/2026-04-29-router-bias-load-balancing.md`.
 4. **FSDP1 → FSDP2 migration** (pzerfos/OpenMythos#6) — lower memory, `torch.compile` support. Worth doing before a larger-scale run.
 5. **Study Gated DeltaNet** — Qwen3.6's hybrid linear+full attention for long-context efficiency. Future architecture direction.
 6. ~~**Decide whether to switch the 10B run mid-training to Option B**~~ — **Resolved 2026-04-29**: switched at step 121,000. See `docs/logbook/2026-04-29-act-to-stochastic-depth-switch.md`.
