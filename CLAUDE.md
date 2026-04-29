@@ -98,11 +98,12 @@ Logs stream to `/u/pzerfos/data/granite-mythos/output/experiments/errs_and_logs/
 
 ### Key local knobs in `training/1b_poc_fineweb.py`
 
-These are plain locals near the top of `main()`, not CLI flags or config fields. Edit in place, commit, push, pull on BlueVela:
+These are plain locals near the top of `main()`. Edit in place, commit, push, pull on BlueVela. `variant` additionally honors a `--variant` CLI flag for submission-time selection (see below); the others are locals only.
 
 - **`recurrent_mode`** — `"stochastic_depth"` (default) or `"act"`. Stochastic_depth samples `n_loops` uniformly from `[stochastic_depth_min, stochastic_depth_max]` per optimizer step (broadcast from rank 0 to prevent FSDP collective-ordering deadlock). ACT uses the original adaptive halting recipe. Checkpoints are cross-mode compatible.
 - **`stochastic_depth_min`, `stochastic_depth_max`** — defaults `1` and `32`.
 - **`router_bias_update_rate`** — DeepSeek-V3 aux-loss-free load balancing. Default `0.0` (disabled). Set to `1e-3` at the next scale-up to enable periodic `router_bias` updates after each optimizer step. Emits `router_imbalance_{max_over_mean,stddev_over_mean,ratio}` to ClearML when > 0.
+- **`variant`** — NoPE ablation variant. Default `"baseline"` (full RoPE via `mythos_1b()`). Other values: `"scoped"` (NoPE in recurrent block only, via `mythos_1b_scoped_nope()`) and `"partial"` (MLA `qk_rope_head_dim=0`, via `mythos_1b_partial_nope()`). Overridable at submission time via `--variant {baseline,scoped,partial}` CLI flag (argparse `parse_known_args` tolerates torchrun's own args). Non-baseline variants write checkpoints under `nope-ablation/{variant}/` and report to a separate ClearML task `nope-ablation/{variant}`. See `docs/superpowers/specs/2026-04-29-nope-for-recurrent-depth-design.md`.
 
 ## Architecture
 
