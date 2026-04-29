@@ -79,6 +79,14 @@ class MythosConfig:
     max_output_tokens: int = 4096
     # Dropout (set 0.0 to disable; 0.1 is standard for pretraining)
     dropout: float = 0.0
+    # Positional encoding mode per site. "rope" uses apply_rope as before;
+    # "nope" skips the rotation (and relies on the causal mask for implicit
+    # position — see Kazemnejad 2023, arxiv 2305.19466). These knobs allow
+    # the Scoped NoPE variant (nope in recurrent block only) without
+    # duplicating attention classes.
+    pe_mode_prelude: str = "rope"
+    pe_mode_coda: str = "rope"
+    pe_mode_recurrent: str = "rope"
 
 
 # ---------------------------------------------------------------------------
