@@ -455,6 +455,10 @@ def main():
     variant = "baseline"
     if cli_args.variant is not None:
         variant = cli_args.variant
+    # Presence of the CLI flag (not just its value) signals "ablation mode" —
+    # used below to isolate checkpoints and ClearML task names from the
+    # production (no-flag) path, even when the variant itself is "baseline".
+    ablation_mode = cli_args.variant is not None
 
     seq_len = 2048
     micro_batch = 1
@@ -473,8 +477,11 @@ def main():
         "OUTPUT_DIR", "/u/pzerfos/data/granite-mythos/output/experiments"
     )
     ckpt_dir = os.path.join(output_dir, "checkpoints")
-    if variant != "baseline":
-        # Keep ablation runs isolated from the production (baseline) checkpoints
+    if ablation_mode:
+        # Keep ablation runs isolated from the production checkpoints. Applies
+        # to all three variants including "baseline" — since `--variant baseline`
+        # means "run the baseline of the ablation", NOT "resume the production
+        # 10B-run checkpoints that live directly under checkpoints/".
         ckpt_dir = os.path.join(output_dir, "checkpoints", "nope-ablation", variant)
     dataset_path = os.environ.get(
         "DATASET_PATH", "/proj/datasets/pzerfos/fineweb-edu-100B/sample/100BT"
@@ -588,10 +595,10 @@ def main():
     # ClearML init (after model is built so we can log config)
     # ------------------------------------------------------------------
     if master:
-        if variant == "baseline":
-            init_clearml(cfg, training_hparams)
-        else:
+        if ablation_mode:
             init_clearml(cfg, training_hparams, task_name=f"nope-ablation/{variant}")
+        else:
+            init_clearml(cfg, training_hparams)
 
     # ------------------------------------------------------------------
     # Optimizer
