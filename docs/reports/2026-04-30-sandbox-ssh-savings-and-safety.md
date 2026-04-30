@@ -8,7 +8,7 @@
 > more important one.
 
 **Date:** 2026-04-30
-**Source audit:** `docs/logbook/2026-04-24-bluevela-ssh-audit.md` (~475 SSH
+**Source audit:** `docs/reports/2026-04-24-ssh-connection-audit.md` (~475 SSH
 connections from Claude Code to BlueVela across the Apr 22–24 OpenMythos 1B PoC
 training bringup campaign)
 
