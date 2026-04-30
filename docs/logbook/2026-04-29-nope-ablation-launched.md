@@ -69,6 +69,14 @@ Wall-clock offset: partial started ~13 min earlier than baseline/scoped due to t
 4. Apply the pre-registered decision matrix from the spec §7 — Green / Partial-win / Mixed / Red.
 5. Write up results in `docs/logbook/2026-04-30-nope-ablation-results.md` mirroring the FSDP2 feasibility-results format.
 
-## Changes to the merged PR
+## Relationship to PR #10
 
-The fixes in commit `897c9e5` were pushed to `main` after PR #10 was already merged. They are NOT in the merged PR diff but they ARE on the branch-that-was-PR-#10's tip at merge-time — meaning the merged code had the two bugs. The `897c9e5` fix commit is a standalone post-merge fix on main. If we ever cherry-pick or re-merge this work elsewhere, include `897c9e5` alongside the PR #10 commits.
+Timeline:
+
+1. PR #10 merged to main at 2026-04-29 21:08 UTC as merge commit `79bdceb`. The 17 NoPE commits on `feat/nope-ablation` at merge-time **contained both bugs** described above — they were not discovered until the launch attempt hours later.
+2. `4a25308 docs(claude): fix router_bias_update_rate default` — post-merge doc-only commit on main (unrelated to the two bugs).
+3. `897c9e5 fix(training/deploy): isolate baseline ablation ckpt dir; pick per-job torchrun port` — post-merge fix commit on main, made 2026-04-30 ~01:11 UTC in response to the launch bugs.
+
+So `897c9e5` is **not** in the PR #10 merge diff; it sits on main as a standalone follow-up. If this work is ever cherry-picked or re-merged elsewhere (e.g., mirrored to the public fork or sent upstream to `kyegomez/OpenMythos`), commit `897c9e5` must travel alongside the PR #10 commits — otherwise the destination gets a broken baseline-variant submission path and a latent torchrun port-collision risk.
+
+PR #10's description on `github.ibm.com/pzerfos/OpenMythos/pull/10` has a **Post-merge addendum** section added on 2026-04-30 pointing at this logbook entry and at `897c9e5`, so anyone landing on the PR page sees the follow-up.
