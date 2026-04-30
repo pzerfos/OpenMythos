@@ -14,24 +14,33 @@ and the two earlier reports in this directory
 > capabilities, and cluster-side services that made OpenMythos work, and
 > identifies which of those are reusable vs. project-specific.
 
-> **Attribution.** Additions marked **`[aif]`** in this document originate
-> from the sibling `aif-experiment-toolkit` repo
-> (`../aif-experiment-toolkit/`), which pursued a parallel effort aimed at
-> similar goals. Where aif has a working artifact that maps onto a gap in
-> this playbook, we adopt the pattern and credit it inline. The broader
-> architecture (MCP-mediated safety model, spec → plan → logbook
-> discipline, `superpowers:*` skill pack) remains the OpenMythos
-> contribution; aif's contributions are largely in the operational
-> discipline around experiments — telemetry, checklists, per-experiment
-> directory structure, monitoring modes.
+> **Attribution.** Additions marked **`[aif]`** or **`[gb-agentic]`** in this
+> document originate from two sibling efforts in the same problem space:
 >
-> **Pending revision.** The aif-derived content is an in-flight integration.
-> Further context on the per-experiment directory layout (numbered
-> `experiments/NNN-<slug>/` + append-only `notebook.md` + living `tldr.md`)
-> is expected shortly and has been intentionally deferred from this pass.
-> Other `[aif]` sections (Launch-readiness checklist, Experiment-monitoring
-> modes, shared-dataset registry, telemetry format) are included but may
-> be refined as the integration matures.
+> - **`aif-experiment-toolkit`** (`../aif-experiment-toolkit/`) — a Python
+>   library + CLI pursuing experiment-operations discipline (telemetry
+>   format, pre-launch checklists, monitoring modes, per-experiment
+>   directory layout).
+> - **`gb-agentic`** (`../../gb-agentic/gb-agentic/`) — an MVP platform
+>   that implements the MCP-orchestrator / sandbox-containment layer
+>   (the `flight-plan-service` + `gbmcp` + `gbserver` stack, network
+>   policy as YAML, the 8-phase agent workflow guide). This is the
+>   concrete infrastructure realization of §5 of this playbook.
+>
+> Where these siblings have a working artifact that maps onto a gap here,
+> we adopt the pattern and credit it inline. The broader architecture
+> (spec → plan → logbook discipline, `superpowers:*` skill pack, the
+> containment-first safety framing) remains the OpenMythos contribution;
+> aif supplies operational discipline around experiments; gb-agentic
+> supplies the platform infrastructure.
+>
+> **Pending revision.** The aif- and gb-agentic-derived content is an
+> in-flight integration. Further context on the per-experiment directory
+> layout (numbered `experiments/NNN-<slug>/` + append-only `notebook.md`
+> + living `tldr.md`) is expected shortly and has been intentionally
+> deferred. The **centralized (`flight-plan-service`) vs. git-local
+> (`docs/superpowers/{specs,plans}/`) "authoritative source" question**
+> is likewise deferred — see §10 open questions.
 
 ---
 
@@ -220,10 +229,13 @@ Things to author per-project:
 
 ## 4. Cluster-side services (owned by ops, not by any project)
 
-This is the layer that doesn't currently exist anywhere in the OpenMythos
-ecosystem, and it's the highest-leverage piece of new infrastructure for
-future projects. A **cluster onboarding bundle**, separate from any single
-project's repo:
+A **cluster onboarding bundle**, separate from any single project's repo.
+In AI-driven R&D as typically practiced today, this layer is often
+improvised per-project or absent entirely — which is how ~35 SSHs worth of
+cluster-topology facts got rediscovered during the OpenMythos bringup that
+motivated this playbook. Cluster operators should provide this bundle
+**once per cluster**, not once per project. (Reference implementation:
+much of this exists in gb-agentic; see §5.)
 
 1. **Preconditions document.** One page covering: firewall whitelist (what
    dashboards / artifact stores are reachable), airgap status of compute
@@ -301,20 +313,99 @@ The containment property. Full rationale is in
 `docs/reports/2026-04-30-sandbox-ssh-savings-and-safety.md`; in brief:
 
 - Sandbox-Claude runs in a persistent cloud sandbox (0 / 1 / 2 GPUs
-  depending on how much of the distributed-systems debugging should move
-  off the cluster — 2-GPU is the right target for FSDP/NCCL work).
-- **All** cluster interactions route through the MCP orchestrator.
-  Sandbox-Claude holds a token to the MCP server; the MCP server holds
-  the SSH credentials. Verbs are narrow, observable, auditable,
-  revocable.
-- Canonical production monitoring stays on human/ops-side channels
-  (ClearML dashboards, ops tooling). Sandbox-Claude can mediate on demand
-  but is never the sole authority.
+  depending on how much of the distributed-systems debugging should
+  move off the cluster — 2-GPU is the right target for FSDP/NCCL work).
+  The sandbox is a **containment primitive, not a VM**: it enforces a
+  narrowed outbound network policy (allowlisted endpoints only) and a
+  restricted filesystem view (read-write only in project work
+  directories). The specific runtime is a deployment choice — this
+  playbook does not pin a technology, though a k8s-sigs-based
+  runtime is the current direction.
+- **All cluster interactions route through an MCP orchestrator**
+  (reference implementation: `gbmcp` + `gbserver` in the gb-agentic
+  stack — see below). Sandbox-Claude holds a token to the MCP server;
+  the MCP server holds the cluster credentials. Verbs are narrow,
+  observable, auditable, revocable.
+- **Canonical production monitoring stays on human/ops-side channels**
+  (ClearML dashboards, ops tooling). Sandbox-Claude can mediate on
+  demand but is never the sole authority.
 
 This separation is what makes the sandbox worth having. Without it, a
 sandbox is just "a cloud machine with SSH keys", which is strictly more
 dangerous than a laptop because it's persistent and not tied to a
 physically-present human.
+
+### Reference implementation: gb-agentic  **`[gb-agentic]`**
+
+The sibling `gb-agentic` repo (`../../gb-agentic/gb-agentic/`) is the
+concrete MVP that realizes this architecture. Where this playbook was
+hand-waving, gb-agentic ships running code. The stack splits into three
+responsibilities:
+
+- **`gbmcp`** — the MCP server that sandbox-Claude talks to. Exposes
+  ~40 narrow verbs covering discovery (`step_list`, `template_list`,
+  `space_list`), flight plans (`plan_save`, `plan_link_build`), build
+  lifecycle (`build_validate`, `build_start`, `build_status`,
+  `build_log`), and artifacts (`artifact_list`, `artifact_describe`).
+  This is the surface the agent sees; cluster credentials live behind
+  it, not in it.
+- **`gbserver`** — the build orchestrator behind gbmcp. Abstracts over
+  cluster backends (K8s, LSF, Docker) so sandbox-Claude doesn't need
+  to know whether a job runs on BlueVela's LSF queue or a K8s pod.
+  gb-agentic deliberately makes **no changes** to gbserver; it's
+  treated as a stable backend the orchestrator layer wraps.
+- **`flight-plan-service`** — a thin FastAPI + SQLAlchemy service
+  (`flight-plan-service/` in the repo, k8s chart included) that
+  stores and versions **flight plans** and links them to gbserver
+  build IDs. Plans are markdown-native; versioning uses a composite
+  primary key `(plan_id, revision)` with full revision history
+  preserved; a link table records which plan revision produced which
+  build, with `execution_notes`. This is the piece that makes the
+  spec-to-build lineage queryable across projects rather than
+  purely filesystem-local.
+
+**Sandbox policy as code.** gb-agentic's `configs/gb-sandbox-policy.yaml`
+enumerates allowed outbound endpoints (MCP server, Git host, PyPI,
+HuggingFace) and filesystem regions (read-only `/usr`, `/lib`, `/etc`;
+read-write only `/sandbox`, `/tmp`), with a `configs/sandbox-setup.sh`
+that injects Git tokens and env vars at first login. **The policy
+file is the security boundary**; the choice of sandbox runtime is a
+swappable implementation detail. The playbook-level lesson is not
+"use this specific runtime", it's: **containment must be expressed as
+a declarative network + filesystem policy that operators can audit
+and the researcher cannot modify from inside the sandbox.**
+
+**Agent workflow as code.** `agent-guide/AGENT_GUIDE.md` in gb-agentic
+codifies an 8-phase loop — Discover → Plan → Develop → Package →
+Validate → Submit → Monitor → Iterate — with explicit MCP tool
+sequences for each phase and explicit error-handling steps (read
+logs, diagnose, revise plan, resubmit). This is the reference content
+for the §3 **cluster-interaction skill**; a concrete OpenMythos /
+BlueVela instantiation would adapt the phase verbs (`bsub` in place
+of `build_start`, the project's LSF-wrapper conventions, etc.) but
+keep the phase structure intact.
+
+**Complementary layers** — not gaps in gb-agentic, but points where
+other parts of this playbook attach to what gb-agentic already
+provides:
+
+- **Telemetry standardization.** gb-agentic defers telemetry to the
+  individual build — no platform-layer metric naming or JSONL
+  convention. The §4.7 format (from aif) stands as the complementary
+  convention that layers above whatever gb-agentic's artifact store
+  records.
+- **Dataset registry as a typed Python module.** gb-agentic provides
+  artifact identity and lineage at the platform layer (`artifact_list`,
+  `artifact_describe`, artifact lineage — implemented); the §4.6
+  dataset-registry pattern (from aif) is the ergonomic consumer-side
+  layer that exposes datasets as Python objects with `.path`,
+  `.tokenizer`, `.num_parts`. Orthogonal and compatible — the
+  registry can resolve identities through gb-agentic's artifact APIs.
+- **Centralized vs. git-local authoritative source.** gb-agentic puts
+  flight plans in a centralized service; this playbook's §2 puts
+  specs and plans in `docs/superpowers/{specs,plans}/` under version
+  control. Both are valid; the "which one is authoritative for a
+  given project" question is deferred — see §10.
 
 ---
 
@@ -376,36 +467,62 @@ the three-layer split is the playbook.
 
 ## 9. What to prototype first
 
-Given where the OpenMythos ecosystem currently stands, the highest-leverage
-next step is building the **cluster-side services (§4)** — specifically:
+The MCP orchestrator / sandbox / agent-workflow layer — previously the
+keystone gap — is now materially in place via **gb-agentic** (§5).
+That reshapes the "prototype first" list:
 
-- **MCP orchestrator + auth model.** This is the keystone of the safety
-  story and doesn't exist yet.
-- **BlueVela preconditions document + `bluevela_config` pip package.**
-  Codifies the ~20–25 SSH bucket of cluster truths so the next project
-  doesn't relearn them.
+- **Instantiate gb-agentic against a concrete cluster + project.**
+  gb-agentic is generic across backends; the per-cluster wiring
+  (scheduler specifics, shared-storage conventions, scheduler-wrapper
+  split from §2) still needs to land once per cluster. BlueVela + the
+  OpenMythos bringup is the natural first test case because the pain
+  points are freshly documented, but the pattern applies to any target
+  cluster + project pair. gbserver already abstracts LSF, K8s, and
+  Docker as backends — the work is integration and policy, not
+  invention.
+- **Author per-cluster preconditions documents +
+  `<cluster>_config` pip packages.** Codifies each cluster's ~20–25 SSH
+  bucket of cluster-topology truths (ports, firewall posture,
+  airgap rules, shared-FS paths) so the next project on that cluster
+  doesn't relearn them. Needed for every cluster the sandbox-Claude
+  architecture targets; BlueVela is the first concrete instance.
+- **Stand up the aif-style telemetry + dataset-registry layer on top
+  of gb-agentic's artifact store.** §4.6 (registry) and §4.7
+  (telemetry format) are the consumer-side ergonomics; gb-agentic
+  provides the platform substrate they attach to.
 
 The **project-repo template (§2)** is largely a straight extraction from
-the current OpenMythos repo — mostly deletion of project-specific content
-plus a `_TEMPLATE.md` pair under `docs/superpowers/`. Lower priority
-because the marginal value of templating is small until a second project
-actually exists.
+the OpenMythos repo that this playbook draws on — mostly deletion of
+project-specific content plus a `_TEMPLATE.md` pair under
+`docs/superpowers/`. Lower priority because the marginal value of
+templating is small until a second project actually lands against the
+infrastructure.
 
 The **skill pack (§3)** is already mature — the `superpowers:*` skills
-used throughout OpenMythos apply unchanged. The only per-project additions
-(cluster-interaction, launch-readiness, logbook-entry) are short and
-cheap to author once the MCP orchestrator exists.
+apply unchanged, as evidenced by OpenMythos. The only per-project
+additions (cluster-interaction, launch-readiness, experiment-monitoring,
+logbook-entry) are short and cheap to author on top of gb-agentic's
+MCP surface.
 
 ---
 
 ## 10. Open questions for follow-up
 
-- **What's the auth model for the MCP orchestrator?** Per-user tokens?
-  Per-sandbox tokens with TTL? Delegated auth from an identity provider?
-  This is the security-design bottleneck.
+- **Centralized `flight-plan-service` vs. git-local
+  `docs/superpowers/{specs,plans}/` — which is authoritative for a
+  given project?** gb-agentic makes flight plans a centralized,
+  versioned, queryable service record; this playbook's §2 makes specs
+  and plans filesystem-local under version control. Both have real
+  virtues (central: cross-project queryability, mandatory versioning;
+  git-local: self-contained, portable, greppable, no service
+  dependency). The cleanest integration may be "both layers with
+  different authoritativeness per artifact type" — e.g., plan
+  *content* stays in git, plan *identity + lineage + build links*
+  goes in flight-plan-service — but that needs more thinking before
+  prescribing. **Deferred.**
 - **Should the template repo carry a minimal "hello-world" model** (e.g.,
-  a tiny 10M-param transformer) so the first-PR walkthrough has something
-  to land against? Or is that contrary to §7?
+  a tiny 10M-param transformer) so the first-PR walkthrough has
+  something to land against? Or is that contrary to §7?
 - **How opinionated should the template be about FSDP vs FSDP2?** The
   FSDP2 feasibility work suggests migration is worth it; baking it in
   saves the next project from the FSDP1 dtype-fix saga entirely.
