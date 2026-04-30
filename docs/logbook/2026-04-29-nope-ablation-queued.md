@@ -1,7 +1,8 @@
 # NoPE Ablation — Queued for Launch on or after 2026-05-01
 
 **Date:** 2026-04-29
-**Status:** Code prepared on branch `feat/nope-ablation`. Launch held pending BlueVela load reduction.
+**Status:** ~~Code prepared on branch `feat/nope-ablation`. Launch held pending BlueVela load reduction.~~
+**Superseded by:** `docs/logbook/2026-04-29-nope-ablation-launched.md` — BlueVela had free slots the same night, so we launched on 2026-04-29 at 01:04 UTC instead of waiting for 2026-05-01. Jobs: 75472 (partial), 75479 (baseline), 75480 (scoped) on preemptable, 4 GPUs each.
 
 ---
 
