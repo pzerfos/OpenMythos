@@ -82,8 +82,9 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     cfg = VARIANT_TO_CFG[args.variant]()
-    # Enlarge max_seq_len for the longest eval length
-    cfg.max_seq_len = max(args.seq_lengths)
+    # NOTE: keep cfg.max_seq_len at its training value here so OpenMythos(cfg)
+    # constructs freqs_cis buffers matching the checkpoint. We resize the
+    # buffers via _regenerate_freqs after load_state_dict succeeds.
 
     logger.info(f"loading checkpoint {args.checkpoint}")
     ckpt = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
@@ -94,7 +95,9 @@ def main():
     model = OpenMythos(cfg)
     model.load_state_dict(ckpt["model"])
     model = model.to(device).eval()
-    _regenerate_freqs(model, cfg.max_seq_len, device)
+    max_eval_len = max(args.seq_lengths)
+    cfg.max_seq_len = max_eval_len
+    _regenerate_freqs(model, max_eval_len, device)
 
     # Load held-out sequences
     logger.info(f"loading held-out shard: {args.held_out_shard}")
