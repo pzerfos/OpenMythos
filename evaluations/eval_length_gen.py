@@ -82,12 +82,16 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     cfg = VARIANT_TO_CFG[args.variant]()
-    # NOTE: keep cfg.max_seq_len at its training value here so OpenMythos(cfg)
-    # constructs freqs_cis buffers matching the checkpoint. We resize the
-    # buffers via _regenerate_freqs after load_state_dict succeeds.
 
     logger.info(f"loading checkpoint {args.checkpoint}")
     ckpt = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
+
+    # Infer the training-time max_seq_len from the checkpoint's freqs_cis buffer
+    # so OpenMythos(cfg).__init__ builds buffers whose shape matches the
+    # checkpoint. training/1b_poc_fineweb.py overrides cfg.max_seq_len = 2048,
+    # which is smaller than the variant default (4096) -- without this, strict
+    # load_state_dict fails with a shape mismatch on freqs_cis[*].
+    cfg.max_seq_len = ckpt["model"]["freqs_cis"].shape[0]
 
     tokenizer = MythosTokenizer()
     cfg.vocab_size = tokenizer.vocab_size
